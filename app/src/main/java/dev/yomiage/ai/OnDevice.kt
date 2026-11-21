@@ -3,6 +3,7 @@ package dev.yomiage.ai
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
@@ -12,6 +13,9 @@ import com.google.mlkit.genai.common.DownloadStatus
 import com.google.mlkit.genai.common.FeatureStatus
 import com.google.mlkit.genai.prompt.Generation
 import com.google.mlkit.genai.prompt.GenerativeModel
+import com.google.mlkit.genai.prompt.ImagePart
+import com.google.mlkit.genai.prompt.TextPart
+import com.google.mlkit.genai.prompt.generateContentRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -214,7 +218,7 @@ object OnDevice {
         if (bytes >= 1_073_741_824) String.format(Locale.US, "%.1f GB", bytes / 1_073_741_824.0)
         else "${bytes / 1_048_576} MB"
 
-    suspend fun stream(prompt: String, cancelled: () -> Boolean, onText: (String) -> Unit) {
+    suspend fun stream(prompt: String, cancelled: () -> Boolean, image: Bitmap? = null, onText: (String) -> Unit) {
         var s = _state.value
         if (s != NanoState.AVAILABLE) s = refresh()
         when (s) {
@@ -227,7 +231,12 @@ object OnDevice {
         val p = if (prompt.length > 11_000) prompt.take(11_000) else prompt
         AiHost.hold(app) {
             try {
-                client().generateContentStream(p).collect { chunk ->
+                val flow = if (image != null) {
+                    client().generateContentStream(generateContentRequest(ImagePart(image), TextPart(p)) {})
+                } else {
+                    client().generateContentStream(p)
+                }
+                flow.collect { chunk ->
                     if (cancelled()) throw CancellationException("cancelled")
                     val t = chunk.candidates.firstOrNull()?.text
                     if (!t.isNullOrEmpty()) onText(t)

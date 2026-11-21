@@ -25,6 +25,7 @@ import dev.yomiage.data.PlayerVisibility
 import dev.yomiage.data.Prefs
 import dev.yomiage.data.Settings
 import dev.yomiage.reader.Reader
+import dev.yomiage.view.ReadingView
 import dev.yomiage.reader.ReaderState
 import dev.yomiage.reader.Status
 import dev.yomiage.service.FollowAlong
@@ -144,7 +145,12 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             lastVisibility = settings.playerVisibility
             shown = settings.playerVisibility != PlayerVisibility.NEVER
         }
-        if (active) {
+        if (active && ReadingView.open.value) {
+            // The reading view is showing the text with its own controls.
+            closeMenu()
+            hideBubble()
+            hideBar()
+        } else if (active) {
             closeMenu()
             hideBubble()
             ensureHighlight()
@@ -317,6 +323,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
                 onSimple = { service.readScreen(ocr = false, simple = true) },
                 onTap = { service.startTapMode() },
                 onScan = { service.readScreen(ocr = true, simple = false) },
+                onView = { service.readScreen(ocr = false, simple = false, view = true) },
                 onHide = {
                     closeMenu()
                     Prefs.update { it.copy(bubbleMode = BubbleMode.OFF) }
@@ -398,6 +405,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             },
             onTapMode = { service.startTapMode() },
             onExplain = { service.explainCurrent() },
+            onReadingView = { service.openReadingView() },
             onBackToPage = { Explainer.backToPage() },
             onMinimize = { Prefs.update { it.copy(playerMini = true) } },
             onHide = { hidePlayer() },

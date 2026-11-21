@@ -1,5 +1,6 @@
 package dev.yomiage.ai
 
+import android.util.Base64
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,6 +27,19 @@ object Groq {
         "llama-3.1-8b-instant",
     )
 
+    // Models that can look at pictures (Groq's line-up changes; whichever your key has is used).
+    private val vision = listOf(
+        "qwen/qwen3.8-27b",
+        "qwen/qwen3.6-27b",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+    )
+
+    private fun looksVision(id: String): Boolean {
+        val s = id.lowercase()
+        return "vision" in s || "-vl" in s || "scout" in s || "maverick" in s || "qwen3.6" in s || "qwen3.8" in s
+    }
+
     @Volatile
     private var available: List<String>? = null
 
@@ -39,19 +53,27 @@ object Groq {
         data class Busy(val detail: String) : Result
     }
 
-    fun stream(key: String, system: String, user: String, cancelled: () -> Boolean, onText: (String) -> Unit) {
+    fun stream(
+        key: String,
+        system: String,
+        user: String,
+        cancelled: () -> Boolean,
+        image: ByteArray? = null,
+        onText: (String) -> Unit,
+    ) {
         if (key.isBlank()) throw AiException("Add a free Groq key in Yomiage first.")
         val have = available ?: listModels(key.trim()).also { if (it.isNotEmpty()) available = it }
-        val order = if (have.isEmpty()) {
-            preferred
-        } else {
-            val picks = preferred.filter { it in have }
-            picks.ifEmpty { have.filter { chatModel(it) }.take(3) }
+        val order = when {
+            image != null && have.isEmpty() -> vision
+            image != null -> vision.filter { it in have }.ifEmpty { have.filter { looksVision(it) } }
+            have.isEmpty() -> preferred
+            else -> preferred.filter { it in have }.ifEmpty { have.filter { chatModel(it) }.take(3) }
         }
+        if (order.isEmpty()) throw AiException("Your Groq account has no model that can look at pictures right now.")
         var detail = ""
         for (model in order.take(4)) {
             if (cancelled()) return
-            when (val r = attempt(key.trim(), model, system, user, cancelled, onText)) {
+            when (val r = attempt(key.trim(), model, system, user, image, cancelled, onText)) {
                 Result.Ok -> {
                     lastModel = model
                     return
@@ -99,16 +121,29 @@ object Groq {
         model: String,
         system: String,
         user: String,
+        image: ByteArray?,
         cancelled: () -> Boolean,
         onText: (String) -> Unit,
     ): Result {
+        val content: Any = if (image == null) {
+            user
+        } else {
+            JSONArray()
+                .put(JSONObject().put("type", "text").put("text", user))
+                .put(
+                    JSONObject().put("type", "image_url").put(
+                        "image_url",
+                        JSONObject().put("url", "data:image/jpeg;base64," + Base64.encodeToString(image, Base64.NO_WRAP)),
+                    )
+                )
+        }
         val body = JSONObject()
             .put("model", model)
             .put(
                 "messages",
                 JSONArray()
                     .put(JSONObject().put("role", "system").put("content", system))
-                    .put(JSONObject().put("role", "user").put("content", user)),
+                    .put(JSONObject().put("role", "user").put("content", content)),
             )
             .put("temperature", 0.4)
             .put("max_tokens", 2048)

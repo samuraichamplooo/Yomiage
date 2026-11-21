@@ -59,7 +59,7 @@ object Explainer {
         }
     }
 
-    private fun audienceLine(): String {
+    internal fun audienceLine(): String {
         val a = Prefs.current.audience.trim()
         return if (a.isEmpty()) "" else " The listener is $a; pitch the explanation for them."
     }

@@ -1027,8 +1027,47 @@ private fun ReadingSection(settings: YSettings) {
             }
         }
         Divider()
-        SwitchRow("Keep reading below the screen", "On long web pages, keep going past the bottom when the app allows it.", settings.readBelow) { on ->
+        SwitchRow(
+            "Read the whole page",
+            "Keeps going past the bottom of the screen to the end of the page or chapter, loading more as it goes. " +
+                "No tapping needed.",
+            settings.readBelow,
+        ) { on ->
             Prefs.update { it.copy(readBelow = on) }
+        }
+        Divider()
+        SwitchRow(
+            "Scroll the page as it reads",
+            "Keeps the sentence being read on screen. Scroll yourself any time and it waits a few seconds before following again.",
+            settings.followScroll,
+        ) { on ->
+            Prefs.update { it.copy(followScroll = on) }
+        }
+        Divider()
+        SwitchRow(
+            "Skip page clutter",
+            "On web pages, leaves out menus, toolbars, buttons, footers and page numbers, and reads the main text.",
+            settings.smartPage,
+        ) { on ->
+            Prefs.update { it.copy(smartPage = on) }
+        }
+        Divider()
+        SwitchRow(
+            "Explain pictures and tables",
+            "Reads tables row by row, then sums them up simply. When it reaches a diagram or picture, AI explains " +
+                "what it shows in plain words. Uses your AI setup under Simple explanations.",
+            settings.explainVisuals,
+        ) { on ->
+            Prefs.update { it.copy(explainVisuals = on) }
+        }
+        Divider()
+        SwitchRow(
+            "Open in reading view",
+            "Shows the text in a clean, book-like view that follows along as it reads. Tap any paragraph to jump " +
+                "there. You can also open it from the book button on the player.",
+            settings.openView,
+        ) { on ->
+            Prefs.update { it.copy(openView = on) }
         }
         Divider()
         SwitchRow("Scan images when there's no text", "Uses on-device text recognition for pictures, PDFs and apps that hide their text.", settings.autoOcr) { on ->

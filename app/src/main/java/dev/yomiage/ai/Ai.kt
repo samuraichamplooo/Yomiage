@@ -1,5 +1,6 @@
 package dev.yomiage.ai
 
+import android.graphics.Bitmap
 import android.os.SystemClock
 import dev.yomiage.data.Prefs
 import kotlinx.coroutines.CancellationException
@@ -7,6 +8,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 open class AiException(message: String) : Exception(message)
+
+/** A picture for the AI to look at: [jpeg] for online AI, [bitmap] for Gemini Nano on the phone. */
+class Picture(val jpeg: ByteArray, val bitmap: Bitmap)
 
 enum class Engine(val label: String) {
     GEMINI("Gemini"),
@@ -50,6 +54,8 @@ object Ai {
         user: String,
         cancelled: () -> Boolean,
         onStatus: (String) -> Unit = {},
+        /** A picture to look at too (JPEG for online AI, a bitmap for the phone's own). */
+        image: Picture? = null,
         onText: (String) -> Unit,
     ): Engine {
         val engines = ordered()
@@ -66,7 +72,7 @@ object Ai {
             }
             val hasBackup = i < engines.size - 1
             try {
-                runEngine(engine, system, user, cancelled, hasBackup, onStatus, sink)
+                runEngine(engine, system, user, cancelled, hasBackup, onStatus, sink, image)
                 coolDown.remove(engine)
                 lastEngine = engine
                 return engine
@@ -94,6 +100,7 @@ object Ai {
         hasBackup: Boolean,
         onStatus: (String) -> Unit,
         onText: (String) -> Unit,
+        image: Picture? = null,
     ) {
         when (engine) {
             Engine.GEMINI -> withContext(Dispatchers.IO) {
@@ -101,14 +108,21 @@ object Ai {
                     Prefs.current.geminiKey, system, user, cancelled,
                     // Don't wait long on a busy Gemini when there's something else to try.
                     timeBudgetMs = if (hasBackup) 20_000 else 50_000,
-                    onStatus = onStatus, onText = onText,
+                    onStatus = onStatus, image = image?.jpeg, onText = onText,
                 )
             }
             Engine.GROQ -> withContext(Dispatchers.IO) {
-                Groq.stream(Prefs.current.groqKey, system, user, cancelled, onText)
+                Groq.stream(Prefs.current.groqKey, system, user, cancelled, image?.jpeg, onText)
             }
-            Engine.ON_DEVICE -> OnDevice.stream("$system\n\n$user", cancelled, onText)
+            Engine.ON_DEVICE -> OnDevice.stream("$system\n\n$user", cancelled, image?.bitmap, onText)
         }
+    }
+
+    /** Asks for a whole answer (not streamed), from the first engine that works. */
+    suspend fun ask(system: String, user: String, image: Picture? = null, cancelled: () -> Boolean = { false }): String {
+        val sb = StringBuilder()
+        stream(system, user, cancelled, image = image) { sb.append(it) }
+        return sb.toString().trim()
     }
 
     /** Tries every engine separately with a tiny request. Returns one line per engine. */
@@ -127,7 +141,7 @@ object Ai {
             }
             val sb = StringBuilder()
             val line = try {
-                runEngine(engine, "Reply with one word.", "Say ready.", { false }, false, {}) { sb.append(it) }
+                runEngine(engine, "Reply with one word.", "Say ready.", { false }, false, {}, onText = { sb.append(it) })
                 if (sb.isBlank()) "✗ answered with nothing" else {
                     coolDown.remove(engine)
                     "✓ works" + when (engine) {

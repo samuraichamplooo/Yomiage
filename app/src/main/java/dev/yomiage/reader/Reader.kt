@@ -90,6 +90,13 @@ object Reader {
     private val _progress = MutableStateFlow(Progress())
     val progress: StateFlow<Progress> = _progress
 
+    private val _revision = MutableStateFlow(0)
+    /** Goes up whenever the text being read changes (more of the page, an explanation arrived). */
+    val revision: StateFlow<Int> = _revision
+
+    /** Reading waits this long at a figure for its explanation, then moves on without it. */
+    private const val HOLD_TIMEOUT_MS = 25_000L
+
     /** True while a session exists (playing, paused, finished or showing a message). */
     val isBusy: Boolean get() = _state.value.status != Status.Idle
 
@@ -134,6 +141,7 @@ object Reader {
         requestFocus()
         registerNoisy()
         s.start()
+        _revision.value++
         return id
     }
 
@@ -158,7 +166,7 @@ object Reader {
                 val built = TextChunker.build(more, 0, 0, Prefs.current.readUrls, rampFrom = s.n)
                 s.blocks = s.blocks + more
                 for (c in built) {
-                    s.chunks.add(Chunk(c.text, c.block + offset, c.gapMs, c.map))
+                    s.chunks.add(c.withBlock(c.block + offset))
                     s.audio.add(null)
                     s.lengths.add(-1)
                     s.speechLen.add(1)
@@ -167,7 +175,58 @@ object Reader {
             if (done) s.open = false
             s.publishLocked()
         }
+        _revision.value++
         return true
+    }
+
+    /**
+     * Puts the explanation of a figure or table ([block]) where reading is waiting for it, or, with
+     * no [text], lets reading move on. Returns false if that session is no longer the current one.
+     */
+    fun resolveHold(id: Long, block: Int, text: String?): Boolean {
+        val s = session ?: return false
+        if (s.id != id) return false
+        s.withLock {
+            val i = (0 until s.n).firstOrNull { s.chunks[it].hold && s.chunks[it].block == block } ?: return@withLock
+            val clean = text?.trim().orEmpty()
+            val built = if (clean.isEmpty()) {
+                emptyList()
+            } else {
+                val old = s.blocks.getOrNull(block)
+                val nb = TextBlock(clean, old?.bounds, BlockKind.EXPLAINED)
+                s.blocks = s.blocks.toMutableList().also { if (block < it.size) it[block] = nb }
+                TextChunker.build(listOf(nb), 0, 0, Prefs.current.readUrls, rampFrom = 10).map { it.withBlock(block) }
+            }
+            s.replaceChunkLocked(i, built)
+            s.publishLocked()
+        }
+        _revision.value++
+        return true
+    }
+
+    /** Jumps to the start of paragraph [block] (tapping a paragraph in the reading view). */
+    fun jumpToBlock(block: Int) {
+        val s = session ?: return
+        s.withLock {
+            if (s.n == 0) return@withLock
+            val i = (0 until s.n).firstOrNull { s.chunks[it].block == block }
+                ?: (0 until s.n).firstOrNull { s.chunks[it].block > block }
+                ?: return@withLock
+            s.seekAbsChunk = i
+            s.paused = false
+            s.pausedByFocus = false
+        }
+        requestFocus()
+    }
+
+    /** Lets more text be added to a session again (a page that carries on after an explanation). */
+    fun reopen(id: Long) {
+        val s = session ?: return
+        if (s.id != id) return
+        s.withLock {
+            s.open = true
+            s.publishLocked()
+        }
     }
 
     /** Updates the "waiting" line of an open session that has nothing to read yet. */
@@ -400,6 +459,9 @@ object Reader {
 
         var status = Status.Preparing
         private var lastPublished: ReaderState? = null
+        // When reading reached a figure that's still being explained.
+        private var holdIndex = -1
+        private var holdSince = 0L
 
         inline fun <T> withLock(block: () -> T): T {
             lock.lock()
@@ -425,6 +487,39 @@ object Reader {
                 cond.signalAll()
             } finally {
                 lock.unlock()
+            }
+        }
+
+        /**
+         * Swaps chunk [i] (a placeholder) for [with], keeping every position in step. With nothing
+         * to put there, it becomes a moment of silence so reading just carries on.
+         */
+        fun replaceChunkLocked(i: Int, with: List<Chunk>) {
+            if (with.isEmpty()) {
+                val c = chunks[i]
+                chunks[i] = Chunk(c.text, c.block, 0, c.map, hold = false)
+                val quiet = ShortArray(SR / 20)
+                audio[i] = quiet
+                lengths[i] = quiet.size
+                speechLen[i] = quiet.size
+                return
+            }
+            chunks.removeAt(i)
+            audio.removeAt(i)
+            lengths.removeAt(i)
+            speechLen.removeAt(i)
+            chunks.addAll(i, with)
+            audio.addAll(i, List(with.size) { null })
+            lengths.addAll(i, List(with.size) { -1 })
+            speechLen.addAll(i, List(with.size) { 1 })
+            val d = with.size - 1
+            if (d != 0) {
+                // A sentence being made right now belongs to the old numbering: let it be redone.
+                epoch++
+                if (wChunk > i) wChunk += d
+                if (bChunk > i) bChunk += d
+                if (heardChunk > i) heardChunk += d
+                if (seekAbsChunk > i) seekAbsChunk += d
             }
         }
 
@@ -512,6 +607,10 @@ object Reader {
             var i = min(heardChunk, wChunk).coerceAtLeast(0)
             var ahead = 0L
             while (i < n) {
+                if (chunks[i].hold) {
+                    i++
+                    continue
+                }
                 val a = audio[i] ?: return i
                 if (i >= heardChunk) {
                     ahead += a.size
@@ -681,6 +780,7 @@ object Reader {
                         }
 
                         if (paused) {
+                            holdIndex = -1
                             if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.pause()
                             if (!finished) updateHeardLocked(track)
                             status = if (finished) Status.Finished else Status.Paused
@@ -726,6 +826,20 @@ object Reader {
                         }
 
                         val a = audio[wChunk]
+                        if (a == null && chunks[wChunk].hold) {
+                            // A figure still being explained: wait a while, then move on without it.
+                            val now = SystemClock.elapsedRealtime()
+                            if (holdIndex != wChunk) {
+                                holdIndex = wChunk
+                                holdSince = now
+                            }
+                            if (now - holdSince > HOLD_TIMEOUT_MS) {
+                                replaceChunkLocked(wChunk, emptyList())
+                                holdIndex = -1
+                                main.post { _revision.value++ }
+                                continue
+                            }
+                        }
                         if (a == null) {
                             updateHeardLocked(track)
                             if (headFrames(track) >= written) {
@@ -799,6 +913,7 @@ object Reader {
             val chunk = chunks.getOrNull(idx)
             val caption = when {
                 n == 0 -> waiting ?: "Getting ready…"
+                chunk != null && chunk.hold -> "Looking at ${chunk.text}…"
                 status == Status.Preparing && loadingModel -> "Warming up the voice…"
                 status == Status.Preparing -> chunk?.text ?: ""
                 else -> chunk?.text ?: ""

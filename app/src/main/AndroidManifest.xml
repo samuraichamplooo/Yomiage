@@ -106,6 +106,15 @@
 
         <!-- Tapping the media controls brings the player back. -->
         <activity
+            android:name=".view.ReadingViewActivity"
+            android:exported="false"
+            android:label="Reading view"
+            android:launchMode="singleTask"
+            android:taskAffinity="dev.yomiage.reading"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:theme="@style/Theme.Yomiage" />
+
+        <activity
             android:name=".media.ShowPlayerActivity"
             android:excludeFromRecents="true"
             android:exported="false"

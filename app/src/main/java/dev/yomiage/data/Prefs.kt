@@ -28,6 +28,11 @@ data class Settings(
     val playerVisibility: Int = PlayerVisibility.ALWAYS,
     val groqKey: String = "",        // backup AI (free key from console.groq.com)
     val useOnDevice: Boolean = true, // fall back to Gemini Nano on the phone
+    val followScroll: Boolean = true,   // scroll the page along with the voice
+    val smartPage: Boolean = true,      // on web pages: skip menus, toolbars, footers and page numbers
+    val explainVisuals: Boolean = true, // read tables row by row and explain pictures/diagrams with AI
+    val openView: Boolean = false,      // open the reading view whenever a page starts reading
+    val viewTextSp: Int = 19,           // text size in the reading view
 )
 
 object HighlightMode {
@@ -87,6 +92,11 @@ object Prefs {
                 .let { if (it == PlayerVisibility.NEVER) it else PlayerVisibility.ALWAYS },
             groqKey = sp.getString("groqKey", d.groqKey) ?: "",
             useOnDevice = sp.getBoolean("useOnDevice", d.useOnDevice),
+            followScroll = sp.getBoolean("followScroll", d.followScroll),
+            smartPage = sp.getBoolean("smartPage", d.smartPage),
+            explainVisuals = sp.getBoolean("explainVisuals", d.explainVisuals),
+            openView = sp.getBoolean("openView", d.openView),
+            viewTextSp = sp.getInt("viewTextSp", d.viewTextSp),
         )
     }
 
@@ -116,6 +126,11 @@ object Prefs {
             .putInt("playerVisibility", s.playerVisibility)
             .putString("groqKey", s.groqKey)
             .putBoolean("useOnDevice", s.useOnDevice)
+            .putBoolean("followScroll", s.followScroll)
+            .putBoolean("smartPage", s.smartPage)
+            .putBoolean("explainVisuals", s.explainVisuals)
+            .putBoolean("openView", s.openView)
+            .putInt("viewTextSp", s.viewTextSp)
             .apply()
     }
 }

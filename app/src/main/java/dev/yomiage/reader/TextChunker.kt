@@ -4,16 +4,36 @@ import android.graphics.Rect
 import android.icu.text.BreakIterator
 import java.util.Locale
 
-/** A piece of text from the screen (a paragraph, a label, a line of a list) and where it is. */
-data class TextBlock(val text: String, val bounds: Rect? = null)
+/** What a block of text is, for the reading view and for figures and tables. */
+object BlockKind {
+    const val TEXT = 0
+    const val HEADING = 1
+    const val FIGURE = 2
+    const val TABLE = 3
+    const val EXPLAINED = 4   // an AI's plain-language explanation of a figure or table
+}
+
+/**
+ * A piece of text from the screen (a paragraph, a label, a line of a list) and where it is.
+ * With [hold], the block is a placeholder (a figure being explained): reading waits there until
+ * the explanation arrives (see Reader.resolveHold), or moves on if it takes too long.
+ */
+data class TextBlock(
+    val text: String,
+    val bounds: Rect? = null,
+    val kind: Int = BlockKind.TEXT,
+    val hold: Boolean = false,
+)
 
 /**
  * One unit of speech: usually a sentence. [gapMs] is the pause added after it.
  * [map] gives, for each character of [text], its index in the block's original text, so the
- * sentence and the word being spoken can be found on screen.
+ * sentence and the word being spoken can be found on screen. A [hold] chunk isn't spoken: it
+ * marks where an explanation that's still being written will go.
  */
-class Chunk(val text: String, val block: Int, val gapMs: Int, val map: IntArray) {
-    fun withGap(gap: Int) = Chunk(text, block, gap, map)
+class Chunk(val text: String, val block: Int, val gapMs: Int, val map: IntArray, val hold: Boolean = false) {
+    fun withGap(gap: Int) = Chunk(text, block, gap, map, hold)
+    fun withBlock(b: Int) = Chunk(text, b, gapMs, map, hold)
 }
 
 object TextChunker {
@@ -124,6 +144,11 @@ object TextChunker {
         val out = ArrayList<Chunk>()
         val bi = BreakIterator.getSentenceInstance(Locale.getDefault())
         for (b in startBlock.coerceAtLeast(0) until blocks.size) {
+            if (blocks[b].hold) {
+                val t = blocks[b].text.ifBlank { "Figure" }
+                out.add(Chunk(t, b, GAP_BLOCK, IntArray(t.length) { it }, hold = true))
+                continue
+            }
             val full = normalize(blocks[b].text, readUrls)
             var text = full.text
             var map = full.map

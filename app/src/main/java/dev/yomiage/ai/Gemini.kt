@@ -1,6 +1,7 @@
 package dev.yomiage.ai
 
 import android.os.SystemClock
+import android.util.Base64
 import android.util.Log
 import dev.yomiage.data.Prefs
 import org.json.JSONArray
@@ -56,6 +57,8 @@ object Gemini {
         cancelled: () -> Boolean,
         timeBudgetMs: Long = 60_000,
         onStatus: (String) -> Unit = {},
+        /** A JPEG picture to look at along with the text (figures and diagrams). */
+        image: ByteArray? = null,
         onText: (String) -> Unit,
     ) {
         if (key.isBlank()) throw GeminiException("Add your free Gemini API key in Yomiage first.")
@@ -72,7 +75,7 @@ object Gemini {
                 if (cancelled()) return
                 if (SystemClock.elapsedRealtime() > deadline) break
                 tries++
-                val r = attempt(key.trim(), model, thinking, system, user, cancelled, onText)
+                val r = attempt(key.trim(), model, thinking, system, user, image, cancelled, onText)
                 when (r) {
                     Result.Ok -> {
                         lastModel = model
@@ -118,17 +121,24 @@ object Gemini {
         thinking: Boolean,
         system: String,
         user: String,
+        image: ByteArray?,
         cancelled: () -> Boolean,
         onText: (String) -> Unit,
     ): Result {
+        val parts = JSONArray()
+        if (image != null) {
+            parts.put(
+                JSONObject().put(
+                    "inline_data",
+                    JSONObject().put("mime_type", "image/jpeg")
+                        .put("data", Base64.encodeToString(image, Base64.NO_WRAP)),
+                )
+            )
+        }
+        parts.put(JSONObject().put("text", user))
         val body = JSONObject()
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
-            .put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", user)))
-                ),
-            )
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
             .put(
                 "generationConfig",
                 JSONObject().put("temperature", 0.4).put("maxOutputTokens", 4096).apply {

@@ -32,6 +32,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import dev.yomiage.view.ReadingView
 
 /**
  * The accessibility service: it reads the text of the app on screen (only when asked),
@@ -64,6 +66,11 @@ class ReaderService : AccessibilityService() {
     private val foreground = MutableStateFlow<String?>(null)
     private var screenSession = -1L
     private var screenBlocks: List<ScreenBlock> = emptyList()
+    // The page being read start to finish (null for other kinds of reading).
+    private var page: PageSession? = null
+    private var screenPkg: String? = null
+    // A page that went off to explain a paragraph and will carry on afterwards.
+    private var pageAfterExplain: PageSession? = null
 
     // The last real app that was on screen (not home, not us, not the shade), and when it stopped being.
     private var lastApp: String? = null
@@ -87,7 +94,14 @@ class ReaderService : AccessibilityService() {
         _running.value = true
         scope.cancel()
         scope = MainScope()
-        val f = FollowAlong(scope)
+        val f = FollowAlong(
+            scope,
+            screen = { ScreenScanner.screenBounds(this) },
+            mayScroll = {
+                Prefs.current.followScroll && Reader.state.value.status == Status.Playing &&
+                    screenPkg != null && activeAppPackage() == screenPkg
+            },
+        )
         follow = f
         val o = Overlay(this, f)
         overlay = o
@@ -99,7 +113,7 @@ class ReaderService : AccessibilityService() {
         }
         foreground.value = activeAppPackage()
         scope.launch {
-            combine(Reader.state, Prefs.settings, foreground) { st, settings, pkg -> Triple(st, settings, pkg) }
+            combine(Reader.state, Prefs.settings, foreground, ReadingView.open) { st, settings, pkg, _ -> Triple(st, settings, pkg) }
                 .collect { (st, settings, pkg) ->
                     o.update(st, settings, pkg)
                     f.onState(st)
@@ -129,7 +143,7 @@ class ReaderService : AccessibilityService() {
                 if (e.packageName?.toString() != packageName && Reader.state.value.fromScreen) follow?.onScreenMoved()
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                if (e.packageName?.toString() != packageName && Reader.state.value.fromScreen) follow?.onScreenMoved()
+                if (e.packageName?.toString() != packageName && Reader.state.value.fromScreen) follow?.onScrolled()
             }
         }
     }
@@ -269,6 +283,53 @@ class ReaderService : AccessibilityService() {
         }
     }
 
+    /** The app on screen right now. */
+    fun frontPackage(): String? = activeAppPackage()
+
+    /** A screenshot without Yomiage's own bubble, player and highlight on it. */
+    suspend fun captureScreen(): android.graphics.Bitmap? {
+        val o = overlay
+        o?.setInvisible(true)
+        delay(160)
+        return try {
+            OcrScanner.screenshot(this)
+        } finally {
+            o?.setInvisible(false)
+        }
+    }
+
+    /**
+     * Opens the reading view: the text being read, laid out cleanly, following along. For a page,
+     * the rest of it is gathered first, while the page is still on screen to be looked at.
+     */
+    fun openReadingView() {
+        val p = page
+        if (p != null && p.id == Reader.state.value.session && screenPkg != null && activeAppPackage() == screenPkg) {
+            scope.launch {
+                withTimeoutOrNull(6_000) { p.loadNow() }
+                launchReadingView()
+            }
+        } else {
+            launchReadingView()
+        }
+    }
+
+    /** Leaving the reading view: make sure it's the page that comes back, not the home screen. */
+    fun keepPageInFront() {
+        keepAppInFront(screenPkg)
+    }
+
+    private fun launchReadingView() {
+        try {
+            startActivity(
+                Intent(this, dev.yomiage.view.ReadingViewActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "couldn't open the reading view", e)
+        }
+    }
+
     private fun activeAppPackage(): String? = try {
         val apps = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
         val w = apps.firstOrNull { it.isActive } ?: apps.firstOrNull { it.isFocused }
@@ -376,19 +437,46 @@ class ReaderService : AccessibilityService() {
         screenSession = id
         screenBlocks = blocks
         follow?.attach(id, blocks)
+        // Back from explaining a paragraph: the page carries on reading to the end.
+        pageAfterExplain?.let { p ->
+            pageAfterExplain = null
+            if (page === p) p.adopt(id)
+        }
     }
 
     /** Explains the paragraph being read in plain language, then carries on with the page. */
     fun explainCurrent() {
         val st = Reader.state.value
-        Explainer.explainCurrent(if (st.fromScreen && st.session == screenSession) screenBlocks else null)
+        val p = page?.takeIf { it.id == st.session }
+        pageAfterExplain = p
+        val blocks = p?.blocks() ?: screenBlocks.takeIf { st.session == screenSession }
+        Explainer.explainCurrent(if (st.fromScreen) blocks else null)
+    }
+
+    /**
+     * Reads screen blocks as a page: from [startBlock]/[startChar] on, and (with "read the whole
+     * page" on) on past the end of the screen until the page ends, scrolling along.
+     */
+    private fun startPage(blocks: List<ScreenBlock>, startBlock: Int, startChar: Int, pkg: String?, view: Boolean = false) {
+        page?.stop()
+        val p = PageSession(this, scope, follow ?: return, pkg)
+        page = p
+        screenPkg = pkg
+        val id = p.start(blocks, startBlock, startChar, more = Prefs.current.readBelow)
+        attachScreen(id, p.blocks())
+        if (view || Prefs.current.openView) openReadingView()
     }
 
     /**
      * Reads everything on screen from the top. With [ocr], reads the pixels instead of the app's text.
      * With [simple], Gemini rewrites it in plain language first.
      */
-    fun readScreen(ocr: Boolean, simple: Boolean = Prefs.current.alwaysSimple && Explainer.hasKey()) {
+    fun readScreen(
+        ocr: Boolean,
+        simple: Boolean = Prefs.current.alwaysSimple && Explainer.hasKey(),
+        /** Open the reading view once reading starts. */
+        view: Boolean = false,
+    ) {
         overlay?.closeMenu()
         if (!ModelManager.isReady(this)) {
             Reader.showMessage("Download the Kokoro voices in Yomiage first.")
@@ -396,14 +484,20 @@ class ReaderService : AccessibilityService() {
         }
         warmUp()
         scanJob?.cancel()
+        page?.stop()
         scanJob = scope.launch {
             Reader.showPreparing(if (ocr) "Scanning the screen…" else "Looking at the screen…")
             val settings = Prefs.current
+            val pkg = activeAppPackage()
             var blocks = if (ocr) {
                 ocrScan()
             } else {
-                withContext(Dispatchers.Default) { ScreenScanner.scan(this@ReaderService, settings.readBelow) }
+                // A few screens to start with, so reading begins quickly; the rest comes as it reads.
+                withContext(Dispatchers.Default) {
+                    ScreenScanner.scanPage(this@ReaderService, settings.readBelow, screensBelow = 3).blocks
+                }
             }
+            val fromOcr = ocr || blocks.sumOf { it.text.length } < 20
             if (!ocr && blocks.sumOf { it.text.length } < 20 && settings.autoOcr) {
                 Reader.showPreparing("Scanning the screen…")
                 blocks = ocrScan()
@@ -418,9 +512,12 @@ class ReaderService : AccessibilityService() {
                     val id = Reader.read(original.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
                     attachScreen(id, original)
                 }
-            } else {
+            } else if (fromOcr) {
                 val id = Reader.read(blocks.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
+                screenPkg = null
                 attachScreen(id, blocks)
+            } else {
+                startPage(blocks, 0, 0, pkg, view)
             }
         }
     }
@@ -436,27 +533,36 @@ class ReaderService : AccessibilityService() {
 
     private fun readFromTap(x: Int, y: Int) {
         scanJob?.cancel()
+        page?.stop()
         scanJob = scope.launch {
             delay(80) // let the tap layer disappear before looking at the screen
             val settings = Prefs.current
+            val pkg = activeAppPackage()
             var blocks = withContext(Dispatchers.Default) {
-                ScreenScanner.scan(this@ReaderService, settings.readBelow, near = Point(x, y))
+                ScreenScanner.scanPage(this@ReaderService, settings.readBelow, near = Point(x, y), screensBelow = 3).blocks
             }
             var hit = withContext(Dispatchers.Default) { ScreenScanner.locate(blocks, x, y) }
+            var ocr = false
             if (hit == null && settings.autoOcr) {
                 Reader.showPreparing("Scanning the screen…")
                 blocks = ocrScan()
                 hit = ScreenScanner.locate(blocks, x, y)
+                ocr = true
             }
             val (block, offset) = hit ?: run {
                 Reader.showMessage("I couldn't find text there. Try tapping right on the words.")
                 return@launch
             }
-            val id = Reader.read(
-                blocks.map { TextBlock(it.text, it.bounds) },
-                startBlock = block, startChar = offset, fromScreen = true,
-            )
-            attachScreen(id, blocks)
+            if (ocr) {
+                val id = Reader.read(
+                    blocks.map { TextBlock(it.text, it.bounds) },
+                    startBlock = block, startChar = offset, fromScreen = true,
+                )
+                screenPkg = null
+                attachScreen(id, blocks)
+            } else {
+                startPage(blocks, block, offset, pkg)
+            }
         }
     }
 

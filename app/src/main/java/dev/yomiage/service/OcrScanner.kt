@@ -56,7 +56,7 @@ object OcrScanner {
         }
     }
 
-    private suspend fun screenshot(service: AccessibilityService): Bitmap? =
+    internal suspend fun screenshot(service: AccessibilityService): Bitmap? =
         suspendCancellableCoroutine { cont ->
             try {
                 service.takeScreenshot(

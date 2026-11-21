@@ -5,6 +5,8 @@ import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
+import android.os.SystemClock
+import dev.yomiage.reader.BlockKind
 import dev.yomiage.reader.Chunk
 import dev.yomiage.reader.ReaderState
 import kotlinx.coroutines.CoroutineScope
@@ -25,11 +27,25 @@ import kotlin.math.min
  */
 class Geometry(val session: Long, val chunkIndex: Int, val chars: Array<RectF?>?, val fallback: Rect?)
 
-/** Finds the sentence and word being read on screen so they can be highlighted. */
-class FollowAlong(private val scope: CoroutineScope) {
+/**
+ * Finds the sentence and word being read on screen so they can be highlighted, and scrolls the
+ * page so what's being read stays in view (unless you've just scrolled it yourself).
+ */
+class FollowAlong(
+    private val scope: CoroutineScope,
+    private val screen: () -> Rect,
+    /** Whether scrolling along is allowed right now (setting on, the page is in front, playing). */
+    private val mayScroll: () -> Boolean,
+) {
     private companion object {
         const val TAG = "FollowAlong"
+        const val HANDS_OFF_MS = 7_000L   // after you scroll the page yourself
     }
+
+    private var ownScrollAt = 0L
+    private var userScrollAt = 0L
+    private var scrolledFor = -1      // chunk index the last automatic scroll was for
+    private var scrollTries = 0
 
     private var session = -1L
     private var blocks: List<ScreenBlock> = emptyList()
@@ -51,7 +67,27 @@ class FollowAlong(private val scope: CoroutineScope) {
         moved = false
         chunk = null
         chunkIndex = -1
+        scrolledFor = -1
+        scrollTries = 0
         _geometry.value = null
+    }
+
+    /** More of the page was found (reading continues further down). */
+    fun extend(session: Long, more: List<ScreenBlock>) {
+        if (session != this.session || more.isEmpty()) return
+        blocks = blocks + more
+    }
+
+    /** Yomiage is about to scroll the page itself (so it isn't mistaken for you scrolling). */
+    fun noteOwnScroll() {
+        ownScrollAt = SystemClock.uptimeMillis()
+    }
+
+    /** The page scrolled: by us, or by you (then automatic scrolling waits a few seconds). */
+    fun onScrolled() {
+        val now = SystemClock.uptimeMillis()
+        if (now - ownScrollAt > 1_500) userScrollAt = now
+        onScreenMoved()
     }
 
     fun onState(st: ReaderState) {
@@ -92,11 +128,79 @@ class FollowAlong(private val scope: CoroutineScope) {
                     null
                 }
             } ?: return@launch
-            if (s == session && idx == chunkIndex) _geometry.value = Geometry(s, idx, result.first, result.second)
+            if (s == session && idx == chunkIndex) {
+                _geometry.value = Geometry(s, idx, result.first, result.second)
+                if (!ocr) keepInView(block, c, idx, result.first, result.second)
+            }
         }
     }
 
+    /** Scrolls the page when the sentence being read is off screen or about to go under the player. */
+    private fun keepInView(block: ScreenBlock, c: Chunk, idx: Int, chars: Array<RectF?>?, fallback: Rect?) {
+        val now = SystemClock.uptimeMillis()
+        if (now - userScrollAt < HANDS_OFF_MS || !mayScroll()) return
+        if (scrolledFor != idx) {
+            scrolledFor = idx
+            scrollTries = 0
+        }
+        if (scrollTries >= 2) return
+        val where = RectF()
+        chars?.forEach { r -> if (r != null && r.width() > 0f && r.height() > 0f) where.union(r) }
+        if (where.isEmpty && fallback != null && !fallback.isEmpty) where.set(fallback)
+        val node = firstNode(block, c)
+        if (where.isEmpty && node != null) {
+            val r = Rect()
+            ScreenScanner.boundsOf(node, r)
+            where.set(r)
+        }
+        if (where.isEmpty) return
+        if (now - ownScrollAt < 900) {
+            // The page may still be moving from the last scroll: look again once it has settled.
+            measureLater(950 - (now - ownScrollAt))
+            return
+        }
+        val sc = screen()
+        val zoneTop = sc.top + sc.height() * 0.10f
+        val zoneBottom = sc.bottom - sc.height() * 0.26f
+        val below = where.top > zoneBottom
+        val above = where.bottom < zoneTop
+        if (!below && !above) return
+        scrollTries++
+        val attempt = scrollTries
+        noteOwnScroll()
+        scope.launch(Dispatchers.Default) {
+            try {
+                // First try "show this on screen" (web pages center it); if that doesn't move the
+                // page (a long paragraph that's already partly visible), page down or up instead.
+                val shown = attempt == 1 && node != null &&
+                    node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)
+                if (!shown) {
+                    val scroller = scrollerFor(node ?: block.node)
+                    scroller?.performAction(
+                        if (below) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "scroll failed", e)
+            }
+        }
+    }
+
+    /** The node holding the start of the sentence (or the figure/table itself). */
+    private fun firstNode(block: ScreenBlock, c: Chunk): AccessibilityNodeInfo? {
+        if (block.kind == BlockKind.FIGURE || block.kind == BlockKind.TABLE) return block.node
+        val first = c.map.firstOrNull() ?: return block.parts.firstOrNull()?.node
+        return block.parts.firstOrNull { first >= it.start && first < it.start + it.text.length }?.node
+            ?: block.parts.firstOrNull()?.node
+    }
+
     private fun measure(block: ScreenBlock, chunk: Chunk, refresh: Boolean): Pair<Array<RectF?>?, Rect?> {
+        if (block.kind == BlockKind.FIGURE || block.kind == BlockKind.TABLE || chunk.hold) {
+            // A figure or table (or its explanation): outline the whole thing.
+            val n = block.node
+            val b = if (n != null) freshBounds(n) else null
+            return null to (b ?: block.bounds)
+        }
         val map = chunk.map
         val out = arrayOfNulls<RectF>(map.size)
         var any = false
@@ -126,7 +230,7 @@ class FollowAlong(private val scope: CoroutineScope) {
                 }
             } else {
                 // No per-character positions: outline this piece of text instead.
-                val b = if (refresh) freshBounds(part) else part.bounds
+                val b = if (refresh) part.node?.let { freshBounds(it) } else part.bounds
                 if (b != null) {
                     val f = fallback
                     if (f == null) fallback = Rect(b) else f.union(b)
@@ -161,14 +265,26 @@ class FollowAlong(private val scope: CoroutineScope) {
         return Array(hi - lo) { i -> arr.getOrNull(i) as? RectF }
     }
 
-    private fun freshBounds(part: Part): Rect? {
-        val node = part.node ?: return null
-        return try {
-            if (!node.refresh()) return null
-            Rect().also { node.getBoundsInScreen(it) }
-        } catch (e: Exception) {
-            null
+    private fun freshBounds(node: AccessibilityNodeInfo): Rect? = try {
+        if (!node.refresh()) null else Rect().also { ScreenScanner.boundsOf(node, it) }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** The scrolling container a node sits in (the web page itself, or a list). */
+    private fun scrollerFor(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        var n = node
+        var depth = 0
+        while (n != null && depth < 60) {
+            if (n.isScrollable) return n
+            n = try {
+                n.parent
+            } catch (e: Exception) {
+                null
+            }
+            depth++
         }
+        return null
     }
 }
 

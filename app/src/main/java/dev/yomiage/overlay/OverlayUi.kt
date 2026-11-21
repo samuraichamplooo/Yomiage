@@ -106,6 +106,7 @@ fun MenuContent(
     onScan: () -> Unit,
     onHide: () -> Unit,
     onOpen: () -> Unit,
+    onView: () -> Unit = {},
 ) {
     Surface(
         shape = RoundedCornerShape(22.dp),
@@ -116,6 +117,7 @@ fun MenuContent(
     ) {
         Column(Modifier.width(IntrinsicSize.Max).padding(vertical = 6.dp)) {
             MenuRow(R.drawable.ic_lines, "Read screen", onRead)
+            MenuRow(R.drawable.ic_book, "Read in reading view", onView)
             MenuRow(R.drawable.ic_sparkle, "Read simplified", onSimple)
             MenuRow(R.drawable.ic_tap, "Tap to start", onTap)
             MenuRow(R.drawable.ic_scan, "Scan text in images", onScan)
@@ -150,6 +152,8 @@ class PlayerActions(
     val onOpenApp: () -> Unit = {},
     val onTapMode: (() -> Unit)? = null,
     val onExplain: (() -> Unit)? = null,
+    /** Opens the text in Yomiage's reading view. */
+    val onReadingView: (() -> Unit)? = null,
     val onBackToPage: (() -> Unit)? = null,
     val onMinimize: (() -> Unit)? = null,
     val onHide: (() -> Unit)? = null,
@@ -274,6 +278,7 @@ fun PlayerBar(
                         .padding(vertical = 8.dp),
                 )
                 if (state.status != Status.Error) {
+                    actions.onReadingView?.let { SmallIcon(R.drawable.ic_book, "Open in reading view", it) }
                     actions.onTapMode?.let { SmallIcon(R.drawable.ic_tap, "Read from a spot you tap", it) }
                     actions.onExplain?.let {
                         if (state.label != "Explanation" && state.chunk != null) {
