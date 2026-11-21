@@ -1016,14 +1016,15 @@ private fun ReadingSection(settings: YSettings) {
         Column(Modifier.padding(16.dp)) {
             Text("Highlight while reading", color = PaperWhite, fontSize = 15.sp)
             Text(
-                "Marks the sentence on screen so you can follow along. Word by word also moves a marker with the voice.",
+                "Word marks just the word being said, moving with the voice. Sentence shades the whole sentence. Both does both.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(10.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip("Off", settings.highlightMode == HighlightMode.OFF) { Prefs.update { it.copy(highlightMode = HighlightMode.OFF) } }
+                FilterChip("Word", settings.highlightMode == HighlightMode.WORD) { Prefs.update { it.copy(highlightMode = HighlightMode.WORD) } }
                 FilterChip("Sentence", settings.highlightMode == HighlightMode.SENTENCE) { Prefs.update { it.copy(highlightMode = HighlightMode.SENTENCE) } }
-                FilterChip("Word by word", settings.highlightMode == HighlightMode.WORD) { Prefs.update { it.copy(highlightMode = HighlightMode.WORD) } }
+                FilterChip("Both", settings.highlightMode == HighlightMode.BOTH) { Prefs.update { it.copy(highlightMode = HighlightMode.BOTH) } }
             }
         }
         Divider()

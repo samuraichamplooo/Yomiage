@@ -455,13 +455,16 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             HighlightLayer(emptyList(), emptyList(), null)
             return
         }
+        val mode = settings.highlightMode
         val chars = g.chars
         if (chars == null) {
-            HighlightLayer(emptyList(), emptyList(), g.fallback?.let { visiblePart(it) })
+            // No letter positions (a picture, a table, some apps): outline what's being read. With
+            // word marking, just a thin line around it rather than a shaded box.
+            HighlightLayer(emptyList(), emptyList(), g.fallback?.let { visiblePart(it) }, outlineFill = HighlightMode.sentence(mode))
             return
         }
-        val sentence = lineRects(chars, 0, chars.size)
-        val word = if (settings.highlightMode == HighlightMode.WORD &&
+        val sentence = if (HighlightMode.sentence(mode)) lineRects(chars, 0, chars.size) else emptyList()
+        val word = if (HighlightMode.word(mode) &&
             progress.session == st.session && progress.chunkIndex == st.chunkIndex && progress.wordStart >= 0
         ) {
             lineRects(chars, progress.wordStart, progress.wordEnd)

@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.yomiage.R
 import dev.yomiage.ai.Explainer
+import dev.yomiage.data.HighlightMode
 import dev.yomiage.data.Prefs
 import dev.yomiage.overlay.PlayerActions
 import dev.yomiage.overlay.PlayerBar
@@ -80,6 +81,7 @@ private val Soft = Color(0xFFD9D1C8)
 private val Muted = Color(0xFF9A928A)
 private val Vermilion = Color(0xFFD8462B)
 private val Sentence = Color(0x40D8462B)
+private val Word = Color(0x59D8462B)
 private val Card = Color(0xFF221F1C)
 
 /**
@@ -177,7 +179,7 @@ private fun ReadingScreen(onBack: () -> Unit) {
                     item { Spacer(Modifier.height(4.dp)) }
                     items(paras, key = { it.block }) { p ->
                         Paragraph(
-                            p, settings.viewTextSp,
+                            p, settings.viewTextSp, settings.highlightMode,
                             chunk = if (p.block == current) state.chunk else null,
                             progress = progress.takeIf { it.session == state.session && it.chunkIndex == state.chunkIndex },
                         ) {
@@ -251,8 +253,8 @@ private fun Pill(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun Paragraph(p: Para, size: Int, chunk: Chunk?, progress: Progress?, onTap: () -> Unit) {
-    val text = highlighted(p.text, chunk, progress)
+private fun Paragraph(p: Para, size: Int, mode: Int, chunk: Chunk?, progress: Progress?, onTap: () -> Unit) {
+    val text = highlighted(p.text, chunk, progress, mode)
     val tap = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onTap)
     when {
         p.waiting -> Box(tap.background(Card).padding(16.dp)) {
@@ -290,20 +292,23 @@ private fun Paragraph(p: Para, size: Int, chunk: Chunk?, progress: Progress?, on
     }
 }
 
-/** The paragraph with the sentence being read shaded and the word being said underlined. */
-private fun highlighted(text: String, chunk: Chunk?, progress: Progress?): AnnotatedString {
-    if (chunk == null || chunk.hold || chunk.map.isEmpty()) return AnnotatedString(text)
+/** The paragraph with the sentence being read shaded and/or the word being said marked (your highlight setting). */
+private fun highlighted(text: String, chunk: Chunk?, progress: Progress?, mode: Int): AnnotatedString {
+    if (chunk == null || chunk.hold || chunk.map.isEmpty() || mode == HighlightMode.OFF) return AnnotatedString(text)
     val s = chunk.map.first().coerceIn(0, text.length)
     val e = (chunk.map.last() + 1).coerceIn(s, text.length)
     return buildAnnotatedString {
         append(text)
-        addStyle(SpanStyle(background = Sentence), s, e)
-        if (progress != null && progress.wordStart >= 0 && progress.wordEnd > progress.wordStart) {
+        if (HighlightMode.sentence(mode)) addStyle(SpanStyle(background = Sentence), s, e)
+        if (HighlightMode.word(mode) && progress != null && progress.wordStart >= 0 && progress.wordEnd > progress.wordStart) {
             val ws = chunk.map.getOrNull(progress.wordStart)
             val we = chunk.map.getOrNull(progress.wordEnd - 1)
             if (ws != null && we != null && ws in 0 until text.length && we + 1 in ws..text.length) {
                 addStyle(
-                    SpanStyle(textDecoration = TextDecoration.Underline, fontWeight = FontWeight.SemiBold, color = Color.White),
+                    SpanStyle(
+                        background = Word, textDecoration = TextDecoration.Underline,
+                        fontWeight = FontWeight.SemiBold, color = Color.White,
+                    ),
                     ws, we + 1,
                 )
             }

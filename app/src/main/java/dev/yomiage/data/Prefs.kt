@@ -37,8 +37,12 @@ data class Settings(
 
 object HighlightMode {
     const val OFF = 0
-    const val SENTENCE = 1
-    const val WORD = 2
+    const val SENTENCE = 1   // shades the sentence being read
+    const val WORD = 2       // marks only the word being said
+    const val BOTH = 3       // the sentence shaded and the word marked
+
+    fun sentence(mode: Int) = mode == SENTENCE || mode == BOTH
+    fun word(mode: Int) = mode == WORD || mode == BOTH
 }
 
 object PlayerVisibility {

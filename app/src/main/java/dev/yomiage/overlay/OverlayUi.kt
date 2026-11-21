@@ -644,7 +644,7 @@ fun TapCatcher(onTap: (Int, Int) -> Unit, onCancel: () -> Unit) {
 
 /** Marks the sentence being read (a soft wash), the word being spoken (stronger), or a paragraph outline. */
 @Composable
-fun HighlightLayer(sentence: List<RectF>, word: List<RectF>, outline: Rect?) {
+fun HighlightLayer(sentence: List<RectF>, word: List<RectF>, outline: Rect?, outlineFill: Boolean = true) {
     val view = LocalView.current
     Canvas(Modifier.fillMaxSize()) {
         if (sentence.isEmpty() && word.isEmpty() && outline == null) return@Canvas
@@ -663,23 +663,30 @@ fun HighlightLayer(sentence: List<RectF>, word: List<RectF>, outline: Rect?) {
             )
         }
         for (r in word) {
+            // Letter boxes on web pages include the gap between lines: trim it so the marker hugs
+            // the word instead of looking like a block.
+            val trimTop = r.height() * 0.12f
+            val trimBottom = r.height() * 0.06f
+            val top = r.top + trimTop
+            val bottom = r.bottom - trimBottom
             drawRoundRect(
-                Vermilion.copy(alpha = 0.42f),
-                Offset(r.left - ox - pad, r.top - oy - pad),
-                Size(r.width() + pad * 2, r.height() + pad * 2),
+                Vermilion.copy(alpha = 0.30f),
+                Offset(r.left - ox - pad, top - oy),
+                Size(r.width() + pad * 2, bottom - top),
                 radius,
             )
-            drawRect(
+            drawRoundRect(
                 Vermilion,
-                Offset(r.left - ox - pad, r.bottom - oy + pad),
-                Size(r.width() + pad * 2, 2.dp.toPx()),
+                Offset(r.left - ox - pad, bottom - oy - 1.dp.toPx()),
+                Size(r.width() + pad * 2, 3.dp.toPx()),
+                CornerRadius(1.5f.dp.toPx()),
             )
         }
         if (outline != null) {
             val p = 6.dp.toPx()
             val tl = Offset(outline.left - ox - p, outline.top - oy - p)
             val sz = Size(outline.width() + p * 2, outline.height() + p * 2)
-            drawRoundRect(Vermilion.copy(alpha = 0.10f), tl, sz, CornerRadius(10.dp.toPx()))
+            if (outlineFill) drawRoundRect(Vermilion.copy(alpha = 0.10f), tl, sz, CornerRadius(10.dp.toPx()))
             drawRoundRect(Vermilion.copy(alpha = 0.8f), tl, sz, CornerRadius(10.dp.toPx()), style = Stroke(width = 2.dp.toPx()))
         }
     }
