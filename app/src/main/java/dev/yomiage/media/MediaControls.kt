@@ -182,7 +182,7 @@ class MediaActionReceiver : BroadcastReceiver() {
 class ShowPlayerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ReaderService.instance?.revealPlayer()
+        ReaderService.instance?.revealPlayer(fromShade = true)
         finish()
     }
 }

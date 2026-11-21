@@ -496,7 +496,8 @@ private fun StartSection(context: Context, settings: YSettings) {
             Text(
                 "One Hand Operation+: turn it on, pick a handle and a swipe direction, choose Open app and pick " +
                     "Read My Screen (or Tap to Read). If it offers app shortcuts, Yomiage → Read screen works too. " +
-                    "Then swipe that handle on any page. While it's reading, the same swipe shows or hides the player.",
+                    "Then swipe that handle on any page to read it. While it's reading, the same swipe shows or hides " +
+                    "the controls, and you stay on the page.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(6.dp))
@@ -815,23 +816,19 @@ private fun PlayerSection(context: Context, settings: YSettings) {
         }
         Divider()
         Column(Modifier.padding(16.dp)) {
-            Text("Show the player", color = PaperWhite, fontSize = 15.sp)
+            Text("Reading controls", color = PaperWhite, fontSize = 15.sp)
             Text(
-                "At start, then hide: the controls appear when reading starts and hide themselves a few seconds after " +
-                    "the voice begins (touching them keeps them up). The eye button hides them any time. To bring them back, " +
-                    "use your Read My Screen gesture again, or tap the reading controls in your quick panel.",
+                "The controls pop up when reading starts and stay until you tap the eye button. To bring them back " +
+                    "(or hide them again), use your Read My Screen gesture: you stay on the page. Tapping the reading " +
+                    "controls in your quick panel brings them back too.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(10.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip("Always", settings.playerVisibility == PlayerVisibility.ALWAYS) {
+                FilterChip("Show when reading starts", settings.playerVisibility != PlayerVisibility.NEVER) {
                     Prefs.update { it.copy(playerVisibility = PlayerVisibility.ALWAYS) }
                 }
-                FilterChip("At start, then hide", settings.playerVisibility == PlayerVisibility.AT_START) {
-                    Prefs.update { it.copy(playerVisibility = PlayerVisibility.AT_START) }
-                    if (!notificationsOk) ask()
-                }
-                FilterChip("Never", settings.playerVisibility == PlayerVisibility.NEVER) {
+                FilterChip("Start hidden", settings.playerVisibility == PlayerVisibility.NEVER) {
                     Prefs.update { it.copy(playerVisibility = PlayerVisibility.NEVER) }
                     if (!notificationsOk) ask()
                 }

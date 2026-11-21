@@ -8,8 +8,9 @@ import dev.yomiage.tts.ModelManager
 
 /**
  * The "Read My Screen" launcher entry. It shows nothing: it closes at once and Yomiage reads the
- * app underneath (or, while reading, shows or hides the player). That makes it work with "Hey Google, open Read My Screen", a side-button
- * double press set to open an app, routines and app-icon shortcuts.
+ * app underneath (or, while reading, shows or hides the player), keeping you in that app. That makes
+ * it work with "Hey Google, open Read My Screen", Good Lock gestures, a side-button double press set
+ * to open an app, routines and app-icon shortcuts.
  */
 class ReadScreenActivity : Activity() {
     companion object {
@@ -25,7 +26,9 @@ class ReadScreenActivity : Activity() {
         } else {
             val tap = intent?.action == ACTION_TAP ||
                 intent?.component?.className?.endsWith("TapToReadLauncher") == true
-            service.gesture(tapMode = tap)
+            // Launched "on top of home": closing this would drop you on the home screen.
+            val homeNext = ((intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_TASK_ON_HOME) != 0
+            service.gesture(tapMode = tap, homeNext = homeNext)
         }
         finish()
         @Suppress("DEPRECATION")

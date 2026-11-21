@@ -37,7 +37,6 @@ import kotlin.math.hypot
 /** Owns the floating windows: bubble, its menu, the player bar, tap mode and the highlight. */
 class Overlay(private val service: ReaderService, private val follow: FollowAlong) {
     private companion object {
-        const val AUTO_HIDE_MS = 5000L
         var hideTipShown = false
     }
 
@@ -53,37 +52,27 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     private var highlight: Win? = null
     private var menuClosedAt = 0L
 
-    // Whether the player is on screen during the current reading run.
+    // Whether the player is on screen during the current reading run. It pops up when reading
+    // starts and stays until you hide it; the gesture or the quick panel brings it back.
     private var running = false
     private var shown = true
-    private var autoArmed = false
     private var lastVisibility = Prefs.current.playerVisibility
-    private val autoHide = Runnable {
-        if (Prefs.current.playerVisibility == PlayerVisibility.AT_START) {
-            shown = false
-            refresh()
-        }
-    }
 
-    /** Brings the player back for this reading (e.g. from the quick panel controls). */
+    /** Brings the player back for this reading (the gesture, or the quick panel controls). */
     fun revealPlayer() {
-        main.removeCallbacks(autoHide)
-        autoArmed = false
         shown = true
         refresh()
     }
 
-    /** Hides the player for the rest of this reading. */
+    /** Hides the player for the rest of this reading, until it's brought back. */
     fun hidePlayer() {
-        main.removeCallbacks(autoHide)
-        autoArmed = false
         shown = false
         refresh()
         if (!hideTipShown) {
             hideTipShown = true
             Toast.makeText(
                 service,
-                "Player hidden. Use the reading controls in your quick panel, and tap them to bring the player back.",
+                "Controls hidden. Use your Read My Screen gesture (or tap the reading controls in the quick panel) to bring them back.",
                 Toast.LENGTH_LONG,
             ).show()
         }
@@ -94,13 +83,6 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
         if (shown) hidePlayer() else revealPlayer()
     }
 
-    /** Any touch on the player restarts the auto-hide countdown. */
-    private fun touched() {
-        if (Prefs.current.playerVisibility == PlayerVisibility.AT_START && shown && !autoArmed) {
-            main.removeCallbacks(autoHide)
-            main.postDelayed(autoHide, AUTO_HIDE_MS)
-        }
-    }
     private var toastedSession = -1L
     private var lastPackage: String? = null
 
@@ -152,26 +134,15 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
         lastPackage = foreground
         val active = state.status != Status.Idle
         if (active && !running) {
-            // A new reading run (from the bubble, a tile, a gesture, Read aloud…).
+            // A new reading run (from the bubble, a tile, a gesture, Read aloud…): the controls pop up.
             running = true
-            main.removeCallbacks(autoHide)
             shown = settings.playerVisibility != PlayerVisibility.NEVER
-            autoArmed = settings.playerVisibility == PlayerVisibility.AT_START
         } else if (!active && running) {
             running = false
-            autoArmed = false
-            main.removeCallbacks(autoHide)
         }
         if (settings.playerVisibility != lastVisibility) {
             lastVisibility = settings.playerVisibility
-            main.removeCallbacks(autoHide)
-            autoArmed = false
             shown = settings.playerVisibility != PlayerVisibility.NEVER
-        }
-        // "At start, then hide": the countdown begins once the voice actually starts.
-        if (active && autoArmed && state.status == Status.Playing) {
-            autoArmed = false
-            main.postDelayed(autoHide, AUTO_HIDE_MS)
         }
         if (active) {
             closeMenu()
@@ -214,7 +185,6 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     }
 
     fun destroy() {
-        main.removeCallbacks(autoHide)
         main.removeCallbacks(tapTimeout)
         main.removeCallbacks(fade)
         for (w in listOf(tap, menu, bar, highlight, bubble)) remove(w)
@@ -431,7 +401,6 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             onBackToPage = { Explainer.backToPage() },
             onMinimize = { Prefs.update { it.copy(playerMini = true) } },
             onHide = { hidePlayer() },
-            onTouch = { touched() },
             onExpand = { Prefs.update { it.copy(playerMini = false) } },
             onToggleText = { Prefs.update { it.copy(showText = !it.showText) } },
             onDrag = { dx, dy ->

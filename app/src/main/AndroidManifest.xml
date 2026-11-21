@@ -13,6 +13,15 @@
         <package android:name="com.samsung.android.goodlock" />
         <package android:name="com.samsung.android.sidegesturepad" />
         <package android:name="com.samsung.android.app.galaxyregistry" />
+        <!-- To put the app you were reading back in front after a gesture, and to know the home screen. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
     </queries>
 
     <application

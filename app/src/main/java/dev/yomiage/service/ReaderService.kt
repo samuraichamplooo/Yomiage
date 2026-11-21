@@ -2,6 +2,7 @@ package dev.yomiage.service
 
 import android.accessibilityservice.AccessibilityButtonController
 import android.accessibilityservice.AccessibilityService
+import android.app.ActivityOptions
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Point
@@ -64,9 +65,19 @@ class ReaderService : AccessibilityService() {
     private var screenSession = -1L
     private var screenBlocks: List<ScreenBlock> = emptyList()
 
+    // The last real app that was on screen (not home, not us, not the shade), and when it stopped being.
+    private var lastApp: String? = null
+    private var lastAppLeftAt = 0L
+    // After a gesture: the app to keep in front if the system jumps to the home screen.
+    private var keepApp: String? = null
+    private var keepUntil = 0L
+    private var keepJob: Job? = null
+    private var homeCache: Set<String>? = null
+
+    /** The accessibility button / shortcut works right where you are, like the gesture. */
     private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
         override fun onClicked(controller: AccessibilityButtonController) {
-            if (Reader.state.value.status == Status.Idle) readScreen(ocr = false) else Reader.togglePlay()
+            if (isReading()) overlay?.togglePlayer() else readScreen(ocr = false)
         }
     }
 
@@ -113,6 +124,7 @@ class ReaderService : AccessibilityService() {
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                if (keepApp != null) checkKeepApp()
                 trackForeground()
                 if (e.packageName?.toString() != packageName && Reader.state.value.fromScreen) follow?.onScreenMoved()
             }
@@ -163,7 +175,97 @@ class ReaderService : AccessibilityService() {
         foregroundJob?.cancel()
         foregroundJob = scope.launch {
             delay(250)
-            foreground.value = activeAppPackage()
+            val pkg = activeAppPackage()
+            foreground.value = pkg
+            noteApp(pkg)
+        }
+    }
+
+    private fun isRealApp(pkg: String?): Boolean =
+        pkg != null && pkg !in transient && pkg != packageName && !isHome(pkg)
+
+    private fun noteApp(pkg: String?) {
+        when {
+            pkg == null || pkg in transient -> Unit
+            isRealApp(pkg) -> {
+                lastApp = pkg
+                lastAppLeftAt = 0L
+            }
+            // The home screen, or Yomiage's own screen.
+            lastAppLeftAt == 0L -> lastAppLeftAt = SystemClock.uptimeMillis()
+        }
+    }
+
+    private fun isReading(): Boolean {
+        val status = Reader.state.value.status
+        return status == Status.Playing || status == Status.Paused ||
+            status == Status.Buffering || status == Status.Preparing
+    }
+
+    /**
+     * The app you were in when a gesture / shortcut fired. If the home screen is showing, it still
+     * counts when it only just appeared (some gesture apps go home on their own before launching us).
+     */
+    private fun appBeforeGesture(): String? {
+        val now = activeAppPackage()
+        if (isRealApp(now)) return now
+        val last = lastApp ?: return null
+        return if (lastAppLeftAt == 0L || SystemClock.uptimeMillis() - lastAppLeftAt < 2_000) last else null
+    }
+
+    /**
+     * Our gesture entry is an invisible activity. When it closes, some launchers (Good Lock's gestures
+     * among them) send you to the home screen instead of back to the page. For a short while after a
+     * gesture, if the home screen shows up, this puts the app you were in straight back.
+     */
+    private fun keepAppInFront(pkg: String?, alreadyBroughtBack: Boolean = false) {
+        keepJob?.cancel()
+        keepApp = null
+        if (pkg == null) return
+        keepUntil = SystemClock.uptimeMillis() + 1_800
+        keepJob = scope.launch {
+            // Give an app we just brought back a moment to come up before checking again.
+            if (alreadyBroughtBack) delay(500)
+            keepApp = pkg
+            while (keepApp != null && SystemClock.uptimeMillis() < keepUntil) {
+                checkKeepApp()
+                delay(60)
+            }
+            keepApp = null
+        }
+    }
+
+    private fun checkKeepApp() {
+        val app = keepApp ?: return
+        if (SystemClock.uptimeMillis() > keepUntil) {
+            keepApp = null
+            return
+        }
+        val now = activeAppPackage()
+        if (isHome(now)) {
+            keepApp = null
+            keepJob?.cancel()
+            bringBack(app)
+        }
+    }
+
+    /** Brings an app's existing screen back to the front, the same way tapping its icon does. */
+    private fun bringBack(pkg: String): Boolean {
+        val intent = try {
+            packageManager.getLaunchIntentForPackage(pkg)
+        } catch (e: Exception) {
+            null
+        } ?: return false
+        intent.addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED or
+                Intent.FLAG_ACTIVITY_NO_ANIMATION
+        )
+        return try {
+            startActivity(intent, ActivityOptions.makeCustomAnimation(this, 0, 0).toBundle())
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "couldn't bring $pkg back", e)
+            false
         }
     }
 
@@ -175,19 +277,36 @@ class ReaderService : AccessibilityService() {
         null
     }
 
-    private fun homePackage(): String? = try {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        packageManager.resolveActivity(intent, 0)?.activityInfo?.packageName
-    } catch (e: Exception) {
-        null
+    /** Home screen apps (One UI Home, or another launcher you've set). */
+    private fun homePackages(): Set<String> {
+        homeCache?.let { return it }
+        return try {
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            val found = packageManager.queryIntentActivities(intent, 0)
+                .mapNotNull { it.activityInfo?.packageName }
+                // Settings has a fallback "home" used only while the phone boots.
+                .filter { it != "android" && it != packageName && it != "com.android.settings" && it != "com.android.provision" }
+                .toSet()
+            if (found.isNotEmpty()) homeCache = found
+            found
+        } catch (e: Exception) {
+            emptySet()
+        }
     }
 
-    /** Waits for a voice assistant, the notification shade or our own launcher stub to get out of the way. */
-    private suspend fun waitForApp(): String? {
+    private fun isHome(pkg: String?): Boolean = pkg != null && pkg in homePackages()
+
+    /**
+     * Waits for a voice assistant, the notification shade or our own launcher stub to get out of the way.
+     * With [expect], a home screen that pops up is also waited out while that app is brought back.
+     */
+    private suspend fun waitForApp(expect: String? = null): String? {
         val until = SystemClock.uptimeMillis() + 3000
         var pkg = activeAppPackage()
-        while (SystemClock.uptimeMillis() < until && (pkg == null || pkg in transient || pkg == packageName)) {
-            delay(200)
+        while (SystemClock.uptimeMillis() < until &&
+            (pkg == null || pkg in transient || pkg == packageName || (expect != null && isHome(pkg)))
+        ) {
+            delay(150)
             pkg = activeAppPackage()
         }
         return pkg
@@ -200,22 +319,25 @@ class ReaderService : AccessibilityService() {
     }
 
     /**
-     * Read My Screen / Tap to Read / a Good Lock gesture. While something is being read, it brings
-     * the hidden player back (or hides it); otherwise it starts reading the app underneath.
+     * Read My Screen / Tap to Read / a Good Lock gesture. While something is being read, it shows the
+     * player (or hides it); otherwise it starts reading the app underneath. Either way you stay in
+     * that app. With [homeNext], the launcher has said it'll show the home screen once our invisible
+     * stub closes, so the app is put back in front right away.
      */
-    fun gesture(tapMode: Boolean) {
-        val status = Reader.state.value.status
-        val reading = status == Status.Playing || status == Status.Paused ||
-            status == Status.Buffering || status == Status.Preparing
-        if (reading && !tapMode) {
+    fun gesture(tapMode: Boolean, homeNext: Boolean = false) {
+        val app = appBeforeGesture()
+        val broughtBack = homeNext && app != null && bringBack(app)
+        keepAppInFront(app, alreadyBroughtBack = broughtBack)
+        if (isReading() && !tapMode) {
             overlay?.togglePlayer()
             return
         }
-        readWhenBack(tapMode = tapMode, closeShade = false)
+        readWhenBack(tapMode = tapMode, closeShade = false, expect = app)
     }
 
-    /** Shows the player again after it was hidden (from the quick panel controls). */
-    fun revealPlayer() {
+    /** Shows the player again after it was hidden (tapping the reading controls in the quick panel). */
+    fun revealPlayer(fromShade: Boolean = false) {
+        if (fromShade) keepAppInFront(appBeforeGesture())
         overlay?.revealPlayer()
     }
 
@@ -229,7 +351,7 @@ class ReaderService : AccessibilityService() {
      * Reads the app that's on screen once something covering it goes away: used by the
      * "Read My Screen" launcher entry (voice assistant, side button) and the Quick Settings tiles.
      */
-    fun readWhenBack(tapMode: Boolean, closeShade: Boolean) {
+    fun readWhenBack(tapMode: Boolean, closeShade: Boolean, expect: String? = null) {
         if (!ModelManager.isReady(this)) {
             Reader.showMessage("Download the Kokoro voices in Yomiage first.")
             return
@@ -241,8 +363,8 @@ class ReaderService : AccessibilityService() {
         scanJob?.cancel()
         scanJob = scope.launch {
             delay(if (closeShade) 450 else 350)
-            val pkg = waitForApp()
-            if (pkg != null && pkg == homePackage()) {
+            val pkg = waitForApp(expect)
+            if (isHome(pkg)) {
                 Reader.showMessage("Open the page or app you want read first, then ask again.")
                 return@launch
             }

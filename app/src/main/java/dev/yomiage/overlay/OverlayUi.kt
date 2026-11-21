@@ -56,7 +56,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalView
@@ -158,19 +157,7 @@ class PlayerActions(
     val onToggleText: (() -> Unit)? = null,
     val onDrag: (Float, Float) -> Unit = { _, _ -> },
     val onDragEnd: () -> Unit = {},
-    /** Called on any touch, so auto-hide can wait while you use the player. */
-    val onTouch: () -> Unit = {},
 )
-
-/** Notices touches without taking them away from the buttons. */
-private fun Modifier.noticeTouches(onTouch: () -> Unit): Modifier = pointerInput(Unit) {
-    awaitPointerEventScope {
-        while (true) {
-            awaitPointerEvent(PointerEventPass.Initial)
-            onTouch()
-        }
-    }
-}
 
 /** A drag handle that reports finger movement in screen pixels. */
 private fun Modifier.dragHandle(actions: PlayerActions, last: FloatArray): Modifier =
@@ -208,8 +195,7 @@ fun PlayerBar(
         modifier = Modifier
             .padding(horizontal = 10.dp, vertical = 6.dp)
             .widthIn(max = 560.dp)
-            .fillMaxWidth()
-            .noticeTouches(actions.onTouch),
+            .fillMaxWidth(),
     ) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, bottom = 10.dp)) {
             // Drag handle (move the bar up or down), with a hide button at the end.
@@ -340,8 +326,7 @@ fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
         border = BorderStroke(1.dp, Hairline),
         shadowElevation = 8.dp,
         modifier = Modifier
-            .padding(6.dp)
-            .noticeTouches(actions.onTouch),
+            .padding(6.dp),
     ) {
         Row(Modifier.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(

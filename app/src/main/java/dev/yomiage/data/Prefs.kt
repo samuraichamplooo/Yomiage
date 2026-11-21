@@ -37,9 +37,8 @@ object HighlightMode {
 }
 
 object PlayerVisibility {
-    const val ALWAYS = 0
-    const val AT_START = 1   // shows when reading starts, then hides itself
-    const val NEVER = 2      // quick panel controls only
+    const val ALWAYS = 0     // pops up when reading starts and stays until you hide it
+    const val NEVER = 2      // starts hidden: bring it up with the gesture or the quick panel
 }
 
 object BubbleMode {
@@ -83,10 +82,9 @@ object Prefs {
             audience = sp.getString("audience", d.audience) ?: "",
             alwaysSimple = sp.getBoolean("alwaysSimple", d.alwaysSimple),
             showText = sp.getBoolean("showText", d.showText),
-            playerVisibility = sp.getInt(
-                "playerVisibility",
-                if (sp.getBoolean("playerHidden", false)) PlayerVisibility.AT_START else d.playerVisibility,
-            ),
+            // The old "at start, then hide" setting (1) became the normal behaviour: shown until you hide it.
+            playerVisibility = sp.getInt("playerVisibility", d.playerVisibility)
+                .let { if (it == PlayerVisibility.NEVER) it else PlayerVisibility.ALWAYS },
             groqKey = sp.getString("groqKey", d.groqKey) ?: "",
             useOnDevice = sp.getBoolean("useOnDevice", d.useOnDevice),
         )
