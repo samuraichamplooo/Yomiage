@@ -21,6 +21,7 @@ import dev.yomiage.ai.Explainer
 import dev.yomiage.data.BubbleMode
 import dev.yomiage.data.Browsers
 import dev.yomiage.data.HighlightMode
+import dev.yomiage.data.PlayerVisibility
 import dev.yomiage.data.Prefs
 import dev.yomiage.data.Settings
 import dev.yomiage.reader.Reader
@@ -35,6 +36,11 @@ import kotlin.math.hypot
 
 /** Owns the floating windows: bubble, its menu, the player bar, tap mode and the highlight. */
 class Overlay(private val service: ReaderService, private val follow: FollowAlong) {
+    private companion object {
+        const val AUTO_HIDE_MS = 5000L
+        var hideTipShown = false
+    }
+
     private val wm = service.getSystemService(WindowManager::class.java)
     private val main = Handler(Looper.getMainLooper())
 
@@ -46,6 +52,55 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     private var tap: Win? = null
     private var highlight: Win? = null
     private var menuClosedAt = 0L
+
+    // Whether the player is on screen during the current reading run.
+    private var running = false
+    private var shown = true
+    private var autoArmed = false
+    private var lastVisibility = Prefs.current.playerVisibility
+    private val autoHide = Runnable {
+        if (Prefs.current.playerVisibility == PlayerVisibility.AT_START) {
+            shown = false
+            refresh()
+        }
+    }
+
+    /** Brings the player back for this reading (e.g. from the quick panel controls). */
+    fun revealPlayer() {
+        main.removeCallbacks(autoHide)
+        autoArmed = false
+        shown = true
+        refresh()
+    }
+
+    /** Hides the player for the rest of this reading. */
+    fun hidePlayer() {
+        main.removeCallbacks(autoHide)
+        autoArmed = false
+        shown = false
+        refresh()
+        if (!hideTipShown) {
+            hideTipShown = true
+            Toast.makeText(
+                service,
+                "Player hidden. Use the reading controls in your quick panel, and tap them to bring the player back.",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    /** For the gesture / Read My Screen while reading: show the player if hidden, hide it if showing. */
+    fun togglePlayer() {
+        if (shown) hidePlayer() else revealPlayer()
+    }
+
+    /** Any touch on the player restarts the auto-hide countdown. */
+    private fun touched() {
+        if (Prefs.current.playerVisibility == PlayerVisibility.AT_START && shown && !autoArmed) {
+            main.removeCallbacks(autoHide)
+            main.postDelayed(autoHide, AUTO_HIDE_MS)
+        }
+    }
     private var toastedSession = -1L
     private var lastPackage: String? = null
 
@@ -95,11 +150,34 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     /** Shows the player while reading; otherwise the bubble, depending on its setting and the app on screen. */
     fun update(state: ReaderState, settings: Settings, foreground: String?) {
         lastPackage = foreground
-        if (state.status != Status.Idle) {
+        val active = state.status != Status.Idle
+        if (active && !running) {
+            // A new reading run (from the bubble, a tile, a gesture, Read aloud…).
+            running = true
+            main.removeCallbacks(autoHide)
+            shown = settings.playerVisibility != PlayerVisibility.NEVER
+            autoArmed = settings.playerVisibility == PlayerVisibility.AT_START
+        } else if (!active && running) {
+            running = false
+            autoArmed = false
+            main.removeCallbacks(autoHide)
+        }
+        if (settings.playerVisibility != lastVisibility) {
+            lastVisibility = settings.playerVisibility
+            main.removeCallbacks(autoHide)
+            autoArmed = false
+            shown = settings.playerVisibility != PlayerVisibility.NEVER
+        }
+        // "At start, then hide": the countdown begins once the voice actually starts.
+        if (active && autoArmed && state.status == Status.Playing) {
+            autoArmed = false
+            main.postDelayed(autoHide, AUTO_HIDE_MS)
+        }
+        if (active) {
             closeMenu()
             hideBubble()
             ensureHighlight()
-            if (settings.playerHidden) {
+            if (!shown) {
                 removeBar()
                 // With no player on screen, say what went wrong in a pop-up instead.
                 if (state.status == Status.Error && state.session != toastedSession) {
@@ -136,6 +214,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     }
 
     fun destroy() {
+        main.removeCallbacks(autoHide)
         main.removeCallbacks(tapTimeout)
         main.removeCallbacks(fade)
         for (w in listOf(tap, menu, bar, highlight, bubble)) remove(w)
@@ -351,14 +430,8 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             onExplain = { service.explainCurrent() },
             onBackToPage = { Explainer.backToPage() },
             onMinimize = { Prefs.update { it.copy(playerMini = true) } },
-            onHide = {
-                Prefs.update { it.copy(playerHidden = true) }
-                Toast.makeText(
-                    service,
-                    "Player hidden. Use the reading controls in your quick panel, and tap them to bring the player back.",
-                    Toast.LENGTH_LONG,
-                ).show()
-            },
+            onHide = { hidePlayer() },
+            onTouch = { touched() },
             onExpand = { Prefs.update { it.copy(playerMini = false) } },
             onToggleText = { Prefs.update { it.copy(showText = !it.showText) } },
             onDrag = { dx, dy ->

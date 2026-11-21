@@ -8,6 +8,13 @@
     <!-- Reading controls in the quick panel and on the lock screen. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- To open Good Lock's gesture modules from the setup screen. -->
+    <queries>
+        <package android:name="com.samsung.android.goodlock" />
+        <package android:name="com.samsung.android.sidegesturepad" />
+        <package android:name="com.samsung.android.app.galaxyregistry" />
+    </queries>
+
     <application
         android:name=".App"
         android:allowBackup="false"
@@ -45,6 +52,34 @@
             <intent-filter>
                 <action android:name="dev.yomiage.READ_SCREEN" />
                 <action android:name="dev.yomiage.TAP_TO_READ" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Second launcher entry for tap-to-start, off until turned on in the app. -->
+        <activity-alias
+            android:name=".TapToReadLauncher"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_tap_screen"
+            android:label="@string/tap_to_read"
+            android:targetActivity=".ReadScreenActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- "Add shortcut" for gesture apps and launchers. -->
+        <activity
+            android:name=".CreateShortcutActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_read_screen"
+            android:label="@string/yomiage_shortcut"
+            android:theme="@style/Theme.Yomiage.Invisible">
+            <intent-filter>
+                <action android:name="android.intent.action.CREATE_SHORTCUT" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>

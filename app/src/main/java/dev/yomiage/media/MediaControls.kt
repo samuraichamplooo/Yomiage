@@ -15,7 +15,7 @@ import android.media.session.PlaybackState
 import android.os.Bundle
 import android.util.Log
 import dev.yomiage.R
-import dev.yomiage.data.Prefs
+import dev.yomiage.service.ReaderService
 import dev.yomiage.reader.Reader
 import dev.yomiage.reader.ReaderState
 import dev.yomiage.reader.Status
@@ -182,7 +182,7 @@ class MediaActionReceiver : BroadcastReceiver() {
 class ShowPlayerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Prefs.update { it.copy(playerHidden = false) }
+        ReaderService.instance?.revealPlayer()
         finish()
     }
 }

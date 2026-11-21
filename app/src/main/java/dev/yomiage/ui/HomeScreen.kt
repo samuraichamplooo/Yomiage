@@ -21,6 +21,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -85,6 +86,7 @@ import dev.yomiage.ai.OnDevice
 import dev.yomiage.data.Accent
 import dev.yomiage.data.BubbleMode
 import dev.yomiage.data.HighlightMode
+import dev.yomiage.data.PlayerVisibility
 import dev.yomiage.data.Prefs
 import dev.yomiage.data.Settings as YSettings
 import dev.yomiage.data.Voice
@@ -427,6 +429,7 @@ private fun Tip(symbol: String, text: String) {
 @Composable
 private fun StartSection(context: Context, settings: YSettings) {
     var launcherOn by remember { mutableStateOf(isLauncherEnabled(context)) }
+    var tapLauncherOn by remember { mutableStateOf(isEnabled(context, TAP_LAUNCHER)) }
     SectionLabel("Ways to start reading")
     Group {
         Column(Modifier.padding(16.dp)) {
@@ -436,11 +439,9 @@ private fun StartSection(context: Context, settings: YSettings) {
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(10.dp))
-            Row {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip("Off", settings.bubbleMode == BubbleMode.OFF) { Prefs.update { it.copy(bubbleMode = BubbleMode.OFF) } }
-                Spacer(Modifier.width(8.dp))
                 FilterChip("Browsers only", settings.bubbleMode == BubbleMode.BROWSERS) { Prefs.update { it.copy(bubbleMode = BubbleMode.BROWSERS) } }
-                Spacer(Modifier.width(8.dp))
                 FilterChip("Always", settings.bubbleMode == BubbleMode.ALWAYS) { Prefs.update { it.copy(bubbleMode = BubbleMode.ALWAYS) } }
             }
         }
@@ -490,12 +491,76 @@ private fun StartSection(context: Context, settings: YSettings) {
         }
         Divider()
         Column(Modifier.padding(16.dp)) {
+            Text("Good Lock gestures", color = PaperWhite, fontSize = 15.sp)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "One Hand Operation+: turn it on, pick a handle and a swipe direction, choose Open app and pick " +
+                    "Read My Screen (or Tap to Read). If it offers app shortcuts, Yomiage → Read screen works too. " +
+                    "Then swipe that handle on any page. While it's reading, the same swipe shows or hides the player.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "RegiStar: under Side key (press and hold) or Back-Tap action, choose Open app → Read My Screen.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                StepButton("One Hand Operation+", outlined = true) {
+                    openPackage(context, "com.samsung.android.sidegesturepad")
+                }
+                StepButton("RegiStar", outlined = true) {
+                    openPackage(context, "com.samsung.android.app.galaxyregistry")
+                }
+            }
+        }
+        SwitchRow(
+            "Show the Tap to Read icon",
+            "A second app entry that starts tap mode, so a gesture can go straight to picking a spot.",
+            tapLauncherOn,
+        ) { on ->
+            setEnabled(context, TAP_LAUNCHER, on)
+            tapLauncherOn = on
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
             Text("Selected text", color = PaperWhite, fontSize = 15.sp)
             Text(
                 "Select text in any app, then choose Read aloud from the menu. Long-press the Yomiage icon for Read screen and Tap to start shortcuts.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
         }
+    }
+}
+
+private const val TAP_LAUNCHER = "dev.yomiage.TapToReadLauncher"
+
+private fun isEnabled(context: Context, cls: String): Boolean =
+    context.packageManager.getComponentEnabledSetting(ComponentName(context, cls)) ==
+        PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+
+private fun setEnabled(context: Context, cls: String, on: Boolean) {
+    context.packageManager.setComponentEnabledSetting(
+        ComponentName(context, cls),
+        if (on) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+        PackageManager.DONT_KILL_APP,
+    )
+}
+
+/** Opens a Good Lock module, or Good Lock / the Galaxy Store page if it isn't installed. */
+private fun openPackage(context: Context, pkg: String) {
+    val pm = context.packageManager
+    val launch = pm.getLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage("com.samsung.android.goodlock")
+    if (launch != null) {
+        open(context, launch)
+        return
+    }
+    try {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse("samsungapps://ProductDetail/$pkg")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (e: Exception) {
+        Toast.makeText(context, "Install Good Lock from the Galaxy Store first", Toast.LENGTH_LONG).show()
     }
 }
 
@@ -736,24 +801,38 @@ private fun PlayerSection(context: Context, settings: YSettings) {
     SectionLabel("Player")
     Group {
         Column(Modifier.padding(16.dp)) {
-            Text("Player while reading", color = PaperWhite, fontSize = 15.sp)
+            Text("Player size", color = PaperWhite, fontSize = 15.sp)
             Text(
-                "Full shows the whole player. Small is a pill you can drag anywhere. Hidden shows nothing on screen: " +
-                    "use the reading controls in your quick panel, lock screen or headphones, and tap them to bring the player back.",
+                "Full shows the whole player. Small is a pill you can drag anywhere.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(10.dp))
             Row {
-                FilterChip("Full", !settings.playerHidden && !settings.playerMini) {
-                    Prefs.update { it.copy(playerHidden = false, playerMini = false) }
-                }
+                FilterChip("Full", !settings.playerMini) { Prefs.update { it.copy(playerMini = false) } }
                 Spacer(Modifier.width(8.dp))
-                FilterChip("Small", !settings.playerHidden && settings.playerMini) {
-                    Prefs.update { it.copy(playerHidden = false, playerMini = true) }
+                FilterChip("Small", settings.playerMini) { Prefs.update { it.copy(playerMini = true) } }
+            }
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Show the player", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "At start, then hide: the controls appear when reading starts and hide themselves a few seconds after " +
+                    "the voice begins (touching them keeps them up). The eye button hides them any time. To bring them back, " +
+                    "use your Read My Screen gesture again, or tap the reading controls in your quick panel.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip("Always", settings.playerVisibility == PlayerVisibility.ALWAYS) {
+                    Prefs.update { it.copy(playerVisibility = PlayerVisibility.ALWAYS) }
                 }
-                Spacer(Modifier.width(8.dp))
-                FilterChip("Hidden", settings.playerHidden) {
-                    Prefs.update { it.copy(playerHidden = true) }
+                FilterChip("At start, then hide", settings.playerVisibility == PlayerVisibility.AT_START) {
+                    Prefs.update { it.copy(playerVisibility = PlayerVisibility.AT_START) }
+                    if (!notificationsOk) ask()
+                }
+                FilterChip("Never", settings.playerVisibility == PlayerVisibility.NEVER) {
+                    Prefs.update { it.copy(playerVisibility = PlayerVisibility.NEVER) }
                     if (!notificationsOk) ask()
                 }
             }
@@ -925,11 +1004,9 @@ private fun ReadingSection(settings: YSettings) {
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(10.dp))
-            Row {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip("Off", settings.highlightMode == HighlightMode.OFF) { Prefs.update { it.copy(highlightMode = HighlightMode.OFF) } }
-                Spacer(Modifier.width(8.dp))
                 FilterChip("Sentence", settings.highlightMode == HighlightMode.SENTENCE) { Prefs.update { it.copy(highlightMode = HighlightMode.SENTENCE) } }
-                Spacer(Modifier.width(8.dp))
                 FilterChip("Word by word", settings.highlightMode == HighlightMode.WORD) { Prefs.update { it.copy(highlightMode = HighlightMode.WORD) } }
             }
         }

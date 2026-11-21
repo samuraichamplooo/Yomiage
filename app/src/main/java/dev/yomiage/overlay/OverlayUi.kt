@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -55,6 +56,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalView
@@ -156,7 +158,19 @@ class PlayerActions(
     val onToggleText: (() -> Unit)? = null,
     val onDrag: (Float, Float) -> Unit = { _, _ -> },
     val onDragEnd: () -> Unit = {},
+    /** Called on any touch, so auto-hide can wait while you use the player. */
+    val onTouch: () -> Unit = {},
 )
+
+/** Notices touches without taking them away from the buttons. */
+private fun Modifier.noticeTouches(onTouch: () -> Unit): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            awaitPointerEvent(PointerEventPass.Initial)
+            onTouch()
+        }
+    }
+}
 
 /** A drag handle that reports finger movement in screen pixels. */
 private fun Modifier.dragHandle(actions: PlayerActions, last: FloatArray): Modifier =
@@ -194,24 +208,38 @@ fun PlayerBar(
         modifier = Modifier
             .padding(horizontal = 10.dp, vertical = 6.dp)
             .widthIn(max = 560.dp)
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .noticeTouches(actions.onTouch),
     ) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, bottom = 10.dp)) {
-            // Drag handle: move the bar up or down.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(20.dp)
-                    .dragHandle(actions, last),
-                contentAlignment = Alignment.Center,
-            ) {
+            // Drag handle (move the bar up or down), with a hide button at the end.
+            Row(Modifier.fillMaxWidth().height(30.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.width(30.dp))
                 Box(
                     Modifier
-                        .padding(end = 8.dp)
-                        .size(width = 36.dp, height = 4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(Color(0x40FFFFFF))
-                )
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .dragHandle(actions, last),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        Modifier
+                            .size(width = 36.dp, height = 4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Color(0x40FFFFFF))
+                    )
+                }
+                actions.onHide?.let { hide ->
+                    Box(
+                        Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = hide),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(painterResource(R.drawable.ic_hide), "Hide the player", tint = Muted, modifier = Modifier.size(17.dp))
+                    }
+                } ?: Spacer(Modifier.width(30.dp))
             }
             if (state.total > 1) {
                 LinearProgressIndicator(
@@ -311,7 +339,9 @@ fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
         color = Ink.copy(alpha = 0.9f),
         border = BorderStroke(1.dp, Hairline),
         shadowElevation = 8.dp,
-        modifier = Modifier.padding(6.dp),
+        modifier = Modifier
+            .padding(6.dp)
+            .noticeTouches(actions.onTouch),
     ) {
         Row(Modifier.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(

@@ -4,6 +4,8 @@
     <string name="read_aloud">Read aloud</string>
     <string name="read_my_screen">Read My Screen</string>
     <string name="tile_read">Read screen</string>
+    <string name="tap_to_read">Tap to Read</string>
+    <string name="yomiage_shortcut">Yomiage</string>
     <string name="tile_tap">Tap to read</string>
     <string name="shortcut_read">Read screen</string>
     <string name="shortcut_tap">Tap to start</string>

@@ -199,6 +199,26 @@ class ReaderService : AccessibilityService() {
         if (ModelManager.isReady(this)) KokoroEngine.preload(this, Voices.byId(Prefs.current.voiceId))
     }
 
+    /**
+     * Read My Screen / Tap to Read / a Good Lock gesture. While something is being read, it brings
+     * the hidden player back (or hides it); otherwise it starts reading the app underneath.
+     */
+    fun gesture(tapMode: Boolean) {
+        val status = Reader.state.value.status
+        val reading = status == Status.Playing || status == Status.Paused ||
+            status == Status.Buffering || status == Status.Preparing
+        if (reading && !tapMode) {
+            overlay?.togglePlayer()
+            return
+        }
+        readWhenBack(tapMode = tapMode, closeShade = false)
+    }
+
+    /** Shows the player again after it was hidden (from the quick panel controls). */
+    fun revealPlayer() {
+        overlay?.revealPlayer()
+    }
+
     fun openApp() {
         startActivity(
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
