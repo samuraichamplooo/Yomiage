@@ -587,7 +587,7 @@ private fun SimpleSection(context: Context, settings: YSettings) {
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))
-            StepButton(if (testing) "Checking…" else "Test key") {
+            StepButton(if (testing) "Checking… (can take a bit when Gemini is busy)" else "Test key") {
                 if (testing) return@StepButton
                 if (settings.geminiKey.isBlank()) {
                     Toast.makeText(context, "Paste your key first", Toast.LENGTH_SHORT).show()
@@ -595,16 +595,15 @@ private fun SimpleSection(context: Context, settings: YSettings) {
                 }
                 testing = true
                 scope.launch {
-                    val error = withContext(Dispatchers.IO) {
+                    val result = withContext(Dispatchers.IO) {
                         try {
-                            Gemini.test(settings.geminiKey)
-                            null
+                            "Your key works (${Gemini.test(settings.geminiKey)})"
                         } catch (e: GeminiException) {
-                            e.message
+                            e.message ?: "Gemini didn't answer."
                         }
                     }
                     testing = false
-                    Toast.makeText(context, error ?: "Your key works", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, result, Toast.LENGTH_LONG).show()
                 }
             }
             Spacer(Modifier.height(14.dp))

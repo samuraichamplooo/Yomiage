@@ -271,7 +271,11 @@ class ReaderService : AccessibilityService() {
                 return@launch
             }
             if (simple) {
-                Explainer.readSimplified(blocks.map { TextBlock(it.text) })
+                val original = blocks
+                Explainer.readSimplified(blocks.map { TextBlock(it.text) }) {
+                    val id = Reader.read(original.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
+                    attachScreen(id, original)
+                }
             } else {
                 val id = Reader.read(blocks.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
                 attachScreen(id, blocks)

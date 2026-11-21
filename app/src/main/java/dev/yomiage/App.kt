@@ -12,6 +12,6 @@ class App : Application() {
         Prefs.init(this)
         Reader.init(this)
         ModelManager.refresh(this)
-        Explainer.init()
+        Explainer.init(this)
     }
 }

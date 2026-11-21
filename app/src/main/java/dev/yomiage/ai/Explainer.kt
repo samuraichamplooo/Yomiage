@@ -1,5 +1,7 @@
 package dev.yomiage.ai
 
+import android.content.Context
+import android.widget.Toast
 import dev.yomiage.data.Prefs
 import dev.yomiage.reader.Reader
 import dev.yomiage.reader.Status
@@ -26,6 +28,7 @@ object Explainer {
     private var explainSession = -1L
     private var resume: Resume? = null
     private var started = false
+    private lateinit var app: Context
 
     /** Lets the screen reader re-attach on-screen highlighting when going back to the page. */
     var onScreenResumed: ((Long, List<ScreenBlock>) -> Unit)? = null
@@ -41,9 +44,10 @@ object Explainer {
 
     fun hasKey() = Prefs.current.geminiKey.isNotBlank()
 
-    fun init() {
+    fun init(context: Context) {
         if (started) return
         started = true
+        app = context.applicationContext
         // When an explanation finishes, carry on with the page.
         scope.launch {
             Reader.state.collect { st ->
@@ -77,15 +81,18 @@ object Explainer {
             "aren't implied by the passage. Don't repeat the passage word for word. Plain text only: no markdown, no " +
             "lists, no emoji."
 
-    /** Reads [blocks] rewritten in simple language. */
-    fun readSimplified(blocks: List<TextBlock>) {
+    /**
+     * Reads [blocks] rewritten in simple language. If Gemini can't be reached, [fallback] reads the
+     * original instead.
+     */
+    fun readSimplified(blocks: List<TextBlock>, fallback: (() -> Unit)? = null) {
         if (!hasKey()) {
             Reader.showMessage("Add your free Gemini key in Yomiage to use simple mode.")
             return
         }
         val text = blocks.joinToString("\n\n") { it.text }.take(14_000)
         resume = null
-        start(simplifySystem(), "Here is the text on my screen:\n\n$text", LABEL_SIMPLE, "Simplifying with Gemini…", null)
+        start(simplifySystem(), "Here is the text on my screen:\n\n$text", LABEL_SIMPLE, "Simplifying with Gemini…", null, fallback)
     }
 
     /** Explains the paragraph being read, then returns to the next sentence of the page. */
@@ -128,7 +135,14 @@ object Explainer {
         if (r.screen != null) onScreenResumed?.invoke(id, r.screen)
     }
 
-    private fun start(system: String, user: String, label: String, waiting: String, back: Resume?) {
+    private fun start(
+        system: String,
+        user: String,
+        label: String,
+        waiting: String,
+        back: Resume?,
+        fallback: (() -> Unit)? = null,
+    ) {
         job?.cancel()
         val key = Prefs.current.geminiKey
         val id = Reader.read(emptyList(), open = true, label = label, waiting = waiting)
@@ -141,16 +155,39 @@ object Explainer {
                     val paragraphs = Paragraphs { p ->
                         if (Reader.append(id, listOf(TextBlock(p)), done = false)) got = true
                     }
-                    Gemini.stream(key, system, user, cancelled = { !isActive || Reader.state.value.session != id }) {
+                    Gemini.stream(
+                        key, system, user,
+                        cancelled = { !isActive || Reader.state.value.session != id },
+                        onStatus = { msg -> if (!got) Reader.setWaiting(id, msg) },
+                    ) {
                         paragraphs.add(it)
                     }
                     paragraphs.flush()
                 }
                 Reader.append(id, emptyList(), done = true)
                 if (!got && Reader.state.value.session == id) Reader.showMessage("Gemini didn't send anything back. Try again.")
-            } catch (e: GeminiException) {
-                if (Reader.state.value.session == id) {
-                    if (got) Reader.append(id, emptyList(), done = true) else Reader.showMessage(e.message ?: "Gemini failed.")
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                if (Reader.state.value.session != id) return@launch
+                if (got) {
+                    Reader.append(id, emptyList(), done = true)
+                    return@launch
+                }
+                val message = if (e is GeminiException) e.message ?: "Gemini didn't answer." else "Something went wrong talking to Gemini."
+                val backTo = resume
+                when {
+                    label == LABEL_EXPLAIN && backTo != null -> {
+                        // Couldn't explain: say why and carry on with the page.
+                        Toast.makeText(app, message, Toast.LENGTH_LONG).show()
+                        explainSession = -1
+                        resume = null
+                        go(backTo)
+                    }
+                    fallback != null -> {
+                        Toast.makeText(app, "$message Reading the original instead.", Toast.LENGTH_LONG).show()
+                        fallback()
+                    }
+                    else -> Reader.showMessage(message)
                 }
             }
         }

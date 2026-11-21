@@ -170,6 +170,16 @@ object Reader {
         return true
     }
 
+    /** Updates the "waiting" line of an open session that has nothing to read yet. */
+    fun setWaiting(id: Long, text: String) {
+        val s = session ?: return
+        if (s.id != id) return
+        s.withLock {
+            s.waiting = text
+            s.publishLocked()
+        }
+    }
+
     fun snapshot(): Snapshot? {
         val s = session ?: return null
         return s.withLock {
