@@ -25,6 +25,9 @@ data class Settings(
     val audience: String = "",       // "explain things for…", e.g. a nursing student
     val alwaysSimple: Boolean = false,
     val showText: Boolean = true,    // show the text panel for simplified reading
+    val playerHidden: Boolean = false, // no on-screen player; use the media controls instead
+    val groqKey: String = "",        // backup AI (free key from console.groq.com)
+    val useOnDevice: Boolean = true, // fall back to Gemini Nano on the phone
 )
 
 object HighlightMode {
@@ -74,6 +77,9 @@ object Prefs {
             audience = sp.getString("audience", d.audience) ?: "",
             alwaysSimple = sp.getBoolean("alwaysSimple", d.alwaysSimple),
             showText = sp.getBoolean("showText", d.showText),
+            playerHidden = sp.getBoolean("playerHidden", d.playerHidden),
+            groqKey = sp.getString("groqKey", d.groqKey) ?: "",
+            useOnDevice = sp.getBoolean("useOnDevice", d.useOnDevice),
         )
     }
 
@@ -100,6 +106,9 @@ object Prefs {
             .putString("audience", s.audience)
             .putBoolean("alwaysSimple", s.alwaysSimple)
             .putBoolean("showText", s.showText)
+            .putBoolean("playerHidden", s.playerHidden)
+            .putString("groqKey", s.groqKey)
+            .putBoolean("useOnDevice", s.useOnDevice)
             .apply()
     }
 }

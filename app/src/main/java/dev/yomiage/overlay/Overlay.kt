@@ -46,6 +46,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     private var tap: Win? = null
     private var highlight: Win? = null
     private var menuClosedAt = 0L
+    private var toastedSession = -1L
     private var lastPackage: String? = null
 
     /** The bubble fades back when it hasn't been touched for a few seconds. */
@@ -97,7 +98,17 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
         if (state.status != Status.Idle) {
             closeMenu()
             hideBubble()
-            showBar()
+            ensureHighlight()
+            if (settings.playerHidden) {
+                removeBar()
+                // With no player on screen, say what went wrong in a pop-up instead.
+                if (state.status == Status.Error && state.session != toastedSession) {
+                    toastedSession = state.session
+                    Toast.makeText(service, state.message ?: "Something went wrong.", Toast.LENGTH_LONG).show()
+                }
+            } else {
+                showBar()
+            }
         } else {
             hideBar()
             val wanted = when (settings.bubbleMode) {
@@ -306,14 +317,16 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
         clampBar(p, mini)
     }
 
+    private fun ensureHighlight() {
+        if (highlight != null) return
+        val hp = params(
+            LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT,
+            LayoutParams.FLAG_NOT_TOUCHABLE or LayoutParams.FLAG_LAYOUT_IN_SCREEN or LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        )
+        highlight = add(hp) { FollowAlongLayer() }
+    }
+
     private fun showBar() {
-        if (highlight == null) {
-            val hp = params(
-                LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT,
-                LayoutParams.FLAG_NOT_TOUCHABLE or LayoutParams.FLAG_LAYOUT_IN_SCREEN or LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            )
-            highlight = add(hp) { FollowAlongLayer() }
-        }
         val existing = bar
         if (existing != null) {
             val mini = Prefs.current.playerMini
@@ -338,6 +351,14 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             onExplain = { service.explainCurrent() },
             onBackToPage = { Explainer.backToPage() },
             onMinimize = { Prefs.update { it.copy(playerMini = true) } },
+            onHide = {
+                Prefs.update { it.copy(playerHidden = true) }
+                Toast.makeText(
+                    service,
+                    "Player hidden. Use the reading controls in your quick panel, and tap them to bring the player back.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            },
             onExpand = { Prefs.update { it.copy(playerMini = false) } },
             onToggleText = { Prefs.update { it.copy(showText = !it.showText) } },
             onDrag = { dx, dy ->
@@ -410,9 +431,13 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
         }
     }
 
-    private fun hideBar() {
+    private fun removeBar() {
         remove(bar)
         bar = null
+    }
+
+    private fun hideBar() {
+        removeBar()
         remove(highlight)
         highlight = null
     }

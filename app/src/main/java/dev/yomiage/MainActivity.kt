@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.mutableStateOf
+import dev.yomiage.ai.AiHost
 import dev.yomiage.ui.HomeScreen
 import dev.yomiage.ui.YomiageTheme
 
@@ -25,6 +26,16 @@ class MainActivity : ComponentActivity() {
                 HomeScreen(pendingText)
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        AiHost.appInFront = true
+    }
+
+    override fun onPause() {
+        AiHost.appInFront = false
+        super.onPause()
     }
 
     override fun onNewIntent(intent: Intent) {

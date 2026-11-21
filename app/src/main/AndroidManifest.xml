@@ -5,6 +5,8 @@
     <!-- Downloading the Kokoro voice pack (once). Reading itself works offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Reading controls in the quick panel and on the lock screen. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".App"
@@ -46,6 +48,29 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- See-through, untouchable window that keeps Yomiage "in front" while on-device AI thinks. -->
+        <activity
+            android:name=".ai.AiHostActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:noHistory="false"
+            android:taskAffinity="dev.yomiage.aihost"
+            android:theme="@style/Theme.Yomiage.Invisible" />
+
+        <!-- Tapping the media controls brings the player back. -->
+        <activity
+            android:name=".media.ShowPlayerActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <receiver
+            android:name=".media.MediaActionReceiver"
+            android:exported="false" />
 
         <activity-alias
             android:name=".ReadScreenLauncher"

@@ -1,5 +1,6 @@
 package dev.yomiage.ui
 
+import android.Manifest
 import android.app.StatusBarManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
@@ -12,6 +13,8 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -75,9 +78,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.yomiage.BuildConfigInfo
 import dev.yomiage.R
+import dev.yomiage.ai.Ai
 import dev.yomiage.ai.Explainer
-import dev.yomiage.ai.Gemini
-import dev.yomiage.ai.GeminiException
+import dev.yomiage.ai.NanoState
+import dev.yomiage.ai.OnDevice
 import dev.yomiage.data.Accent
 import dev.yomiage.data.BubbleMode
 import dev.yomiage.data.HighlightMode
@@ -97,9 +101,7 @@ import dev.yomiage.tile.TapTileService
 import dev.yomiage.tts.ModelManager
 import dev.yomiage.tts.ModelStatus
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private const val SAMPLE = "Yomiage reads whatever is on your screen with natural Kokoro voices. " +
     "Tap the bubble to read a whole page, or tap a spot to start right there. " +
@@ -179,7 +181,7 @@ fun HomeScreen(pendingText: MutableState<String?>) {
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(
                         onClick = { Explainer.readSimplified(TextChunker.paragraphs(text)) },
-                        enabled = modelReady && text.isNotBlank() && settings.geminiKey.isNotBlank(),
+                        enabled = modelReady && text.isNotBlank(),
                     ) {
                         Icon(painterResource(R.drawable.ic_sparkle), null, tint = Seal, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
@@ -207,6 +209,7 @@ fun HomeScreen(pendingText: MutableState<String?>) {
         }
 
         StartSection(context, settings)
+        PlayerSection(context, settings)
         SimpleSection(context, settings)
         VoiceSection(settings, modelReady)
         ReadingSection(settings)
@@ -544,66 +547,147 @@ private fun openAdvancedFeatures(context: Context) {
 // -------------------------------------------------------------------- simple explanations
 
 @Composable
+private fun KeyField(value: String, hint: String, onChange: (String) -> Unit) {
+    var show by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = { onChange(it.trim()) },
+        singleLine = true,
+        placeholder = { Text(hint, color = Faint) },
+        visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+            TextButton(onClick = { show = !show }) { Text(if (show) "Hide" else "Show", color = Faint) }
+        },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Seal,
+            unfocusedBorderColor = Color(0xFF3A3530),
+            cursorColor = Seal,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
 private fun SimpleSection(context: Context, settings: YSettings) {
     val scope = rememberCoroutineScope()
-    var showKey by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
+    var results by remember { mutableStateOf<List<String>?>(null) }
+    val nano by OnDevice.state.collectAsState()
+    val nanoDownload by OnDevice.download.collectAsState()
+    LaunchedEffect(Unit) { OnDevice.refresh() }
+
     SectionLabel("Simple explanations")
     Group {
         Column(Modifier.padding(16.dp)) {
             Text(
                 "Breaks hard passages down into plain language. Tap ✦ in the player to hear the paragraph you're on " +
                     "explained, and then it goes back to the page. Or long-press the bubble and choose Read simplified to hear " +
-                    "the whole page rewritten simply. This uses Google's Gemini over the internet with your own free key.",
+                    "the whole page rewritten simply.",
                 color = Color(0xFFD9D1C8), fontSize = 13.sp, lineHeight = 18.sp,
             )
-            Spacer(Modifier.height(14.dp))
-            Text("1. Get a free key", color = PaperWhite, fontSize = 15.sp)
+            Spacer(Modifier.height(8.dp))
             Text(
-                "Sign in to Google AI Studio, tap Create API key, and copy it.",
+                "Yomiage tries Gemini first, then Groq, then the AI built into your phone. If one isn't answering, " +
+                    "it moves to the next on its own and skips the busy one for a while.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+        }
+        Divider()
+        // On-device first in the list: it needs no key.
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("On this phone (Gemini Nano)", color = PaperWhite, fontSize = 15.sp)
+                    Text(
+                        when (nano) {
+                            NanoState.AVAILABLE -> "Ready. Free, private, works offline, no key needed."
+                            NanoState.DOWNLOADABLE -> "Needs a one-time download from Google."
+                            NanoState.DOWNLOADING -> "Downloading…"
+                            NanoState.UNAVAILABLE -> "Not available on this phone right now."
+                            NanoState.UNKNOWN -> "Checking…"
+                        },
+                        color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+                    )
+                }
+                Switch(
+                    checked = settings.useOnDevice,
+                    onCheckedChange = { on -> Prefs.update { it.copy(useOnDevice = on) } },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = PaperWhite,
+                        checkedTrackColor = Seal,
+                        uncheckedThumbColor = Faint,
+                        uncheckedTrackColor = CardHigh,
+                        uncheckedBorderColor = Color(0xFF3A3530),
+                    ),
+                )
+            }
+            if (nano == NanoState.DOWNLOADABLE || nano == NanoState.DOWNLOADING || nanoDownload != null) {
+                Spacer(Modifier.height(8.dp))
+                nanoDownload?.let { Text(it, color = Faint, fontSize = 12.sp) }
+                if (nano == NanoState.DOWNLOADABLE) {
+                    Spacer(Modifier.height(6.dp))
+                    StepButton("Download on-device AI") { scope.launch { OnDevice.setUp() } }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "While it thinks, Yomiage briefly sits in front of the page in an invisible window, because Android only " +
+                    "lets on-device AI run for the app in front.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Gemini (Google)", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Best quality. Free key from Google AI Studio. The free tier is often overloaded, which is why there are backups.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(8.dp))
-            StepButton("Open Google AI Studio", outlined = true) {
+            KeyField(settings.geminiKey, "Gemini API key") { v -> Prefs.update { it.copy(geminiKey = v) } }
+            Spacer(Modifier.height(6.dp))
+            StepButton("Get a free Gemini key", outlined = true) {
                 open(context, Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
             }
-            Spacer(Modifier.height(14.dp))
-            Text("2. Paste it here", color = PaperWhite, fontSize = 15.sp)
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = settings.geminiKey,
-                onValueChange = { v -> Prefs.update { it.copy(geminiKey = v.trim()) } },
-                singleLine = true,
-                placeholder = { Text("Gemini API key", color = Faint) },
-                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                    TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Hide" else "Show", color = Faint) }
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Seal,
-                    unfocusedBorderColor = Color(0xFF3A3530),
-                    cursorColor = Seal,
-                ),
-                modifier = Modifier.fillMaxWidth(),
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Groq (backup)", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Very fast, free key. Sign in at console.groq.com, open API Keys, tap Create API Key and paste it here.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(8.dp))
-            StepButton(if (testing) "Checking… (can take a bit when Gemini is busy)" else "Test key") {
+            KeyField(settings.groqKey, "Groq API key") { v -> Prefs.update { it.copy(groqKey = v) } }
+            Spacer(Modifier.height(6.dp))
+            StepButton("Get a free Groq key", outlined = true) {
+                open(context, Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys")))
+            }
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            StepButton(if (testing) "Testing… (can take a bit when an AI is busy)" else "Test all") {
                 if (testing) return@StepButton
-                if (settings.geminiKey.isBlank()) {
-                    Toast.makeText(context, "Paste your key first", Toast.LENGTH_SHORT).show()
-                    return@StepButton
-                }
                 testing = true
+                results = null
                 scope.launch {
-                    val result = withContext(Dispatchers.IO) {
-                        try {
-                            "Your key works (${Gemini.test(settings.geminiKey)})"
-                        } catch (e: GeminiException) {
-                            e.message ?: "Gemini didn't answer."
-                        }
+                    results = try {
+                        Ai.testAll()
+                    } catch (e: Exception) {
+                        listOf("Test failed: ${e.message ?: e.javaClass.simpleName}")
                     }
                     testing = false
-                    Toast.makeText(context, result, Toast.LENGTH_LONG).show()
+                }
+            }
+            results?.let { lines ->
+                Spacer(Modifier.height(10.dp))
+                for (line in lines) {
+                    Text(
+                        line,
+                        color = if ("✓" in line) Color(0xFFB9E4B0) else if ("✗" in line) Color(0xFFFFB4A6) else Faint,
+                        fontSize = 13.sp, lineHeight = 18.sp,
+                        modifier = Modifier.padding(vertical = 2.dp),
+                    )
                 }
             }
             Spacer(Modifier.height(14.dp))
@@ -623,7 +707,8 @@ private fun SimpleSection(context: Context, settings: YSettings) {
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                "On Gemini's free tier, Google may use what you send to improve its products, so avoid it for private documents.",
+                "Gemini and Groq run online. On Gemini's free tier, Google may use what you send to improve its products, " +
+                    "so avoid them for private documents. Gemini Nano keeps everything on the phone.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
         }
@@ -635,6 +720,65 @@ private fun SimpleSection(context: Context, settings: YSettings) {
         ) { on -> Prefs.update { it.copy(alwaysSimple = on) } }
     }
 }
+
+@Composable
+private fun PlayerSection(context: Context, settings: YSettings) {
+    var notificationsOk by remember { mutableStateOf(notificationsAllowed(context)) }
+    val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        notificationsOk = ok || notificationsAllowed(context)
+        if (!ok) open(context, Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { notificationsOk = notificationsAllowed(context) }
+    fun ask() {
+        if (Build.VERSION.SDK_INT >= 33) askPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        else open(context, Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+    }
+    SectionLabel("Player")
+    Group {
+        Column(Modifier.padding(16.dp)) {
+            Text("Player while reading", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Full shows the whole player. Small is a pill you can drag anywhere. Hidden shows nothing on screen: " +
+                    "use the reading controls in your quick panel, lock screen or headphones, and tap them to bring the player back.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row {
+                FilterChip("Full", !settings.playerHidden && !settings.playerMini) {
+                    Prefs.update { it.copy(playerHidden = false, playerMini = false) }
+                }
+                Spacer(Modifier.width(8.dp))
+                FilterChip("Small", !settings.playerHidden && settings.playerMini) {
+                    Prefs.update { it.copy(playerHidden = false, playerMini = true) }
+                }
+                Spacer(Modifier.width(8.dp))
+                FilterChip("Hidden", settings.playerHidden) {
+                    Prefs.update { it.copy(playerHidden = true) }
+                    if (!notificationsOk) ask()
+                }
+            }
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Quick panel controls", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                if (notificationsOk) {
+                    "On. While reading, swipe down for play/pause, skip 5 seconds (next/previous) and skip 2 seconds."
+                } else {
+                    "Allow notifications so the reading controls show in your quick panel and on the lock screen."
+                },
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            if (!notificationsOk) {
+                Spacer(Modifier.height(8.dp))
+                StepButton("Allow notifications") { ask() }
+            }
+        }
+    }
+}
+
+private fun notificationsAllowed(context: Context): Boolean =
+    context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
 
 // -------------------------------------------------------------------- voices
 

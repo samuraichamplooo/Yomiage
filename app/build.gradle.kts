@@ -97,4 +97,6 @@ dependencies {
     implementation("org.apache.commons:commons-compress:1.26.2")
     // On-device text recognition for images and apps that don't share their text.
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    // Gemini Nano on the phone (Prompt API), the no-key fallback for simple explanations.
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
 }

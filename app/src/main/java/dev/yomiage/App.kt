@@ -2,6 +2,8 @@ package dev.yomiage
 
 import android.app.Application
 import dev.yomiage.ai.Explainer
+import dev.yomiage.ai.OnDevice
+import dev.yomiage.media.MediaControls
 import dev.yomiage.data.Prefs
 import dev.yomiage.reader.Reader
 import dev.yomiage.tts.ModelManager
@@ -13,5 +15,7 @@ class App : Application() {
         Reader.init(this)
         ModelManager.refresh(this)
         Explainer.init(this)
+        OnDevice.init(this)
+        MediaControls.init(this)
     }
 }

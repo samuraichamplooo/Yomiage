@@ -13,7 +13,7 @@ import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.UnknownHostException
 
-class GeminiException(message: String) : Exception(message)
+class GeminiException(message: String) : AiException(message)
 
 /**
  * Talks to Google's Gemini API with the user's own key (free from Google AI Studio).

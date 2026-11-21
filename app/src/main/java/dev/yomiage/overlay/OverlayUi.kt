@@ -151,6 +151,7 @@ class PlayerActions(
     val onExplain: (() -> Unit)? = null,
     val onBackToPage: (() -> Unit)? = null,
     val onMinimize: (() -> Unit)? = null,
+    val onHide: (() -> Unit)? = null,
     val onExpand: () -> Unit = {},
     val onToggleText: (() -> Unit)? = null,
     val onDrag: (Float, Float) -> Unit = { _, _ -> },
@@ -347,6 +348,7 @@ fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
                 )
             }
             SmallIcon(R.drawable.ic_expand, "Show the full player", actions.onExpand)
+            actions.onHide?.let { SmallIcon(R.drawable.ic_hide, "Hide the player", it) }
         }
     }
 }

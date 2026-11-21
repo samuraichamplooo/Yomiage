@@ -13,7 +13,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Simple mode: reads a page rewritten in plain language, or explains the paragraph being read and
@@ -42,7 +41,7 @@ object Explainer {
         val label: String?,
     )
 
-    fun hasKey() = Prefs.current.geminiKey.isNotBlank()
+    fun hasKey() = Ai.canTry()
 
     fun init(context: Context) {
         if (started) return
@@ -72,7 +71,8 @@ object Explainer {
             "fact and its exact meaning, never add facts that aren't there, and keep the original order. Use a quick " +
             "comparison or example when it really helps. Skip page clutter such as menus, buttons, page numbers, " +
             "ads, figure links, copyright lines and anything that isn't the actual content. Write flowing paragraphs " +
-            "separated by blank lines. Plain text only: no markdown, no bullet symbols, no headings, no emoji."
+            "separated by blank lines. Plain text only: no markdown, no bullet symbols, no headings, no emoji. " +
+            "If you're given one part of a longer page, just rewrite that part, with no introduction or wrap-up."
 
     private fun explainSystem() =
         "You are a patient tutor." + audienceLine() + " Explain the passage the listener just heard: what it " +
@@ -82,23 +82,41 @@ object Explainer {
             "lists, no emoji."
 
     /**
-     * Reads [blocks] rewritten in simple language. If Gemini can't be reached, [fallback] reads the
+     * Reads [blocks] rewritten in simple language. If no AI can be reached, [fallback] reads the
      * original instead.
      */
     fun readSimplified(blocks: List<TextBlock>, fallback: (() -> Unit)? = null) {
         if (!hasKey()) {
-            Reader.showMessage("Add your free Gemini key in Yomiage to use simple mode.")
+            Reader.showMessage("Add a free AI key or turn on on-device AI in Yomiage to use simple mode.")
             return
         }
-        val text = blocks.joinToString("\n\n") { it.text }.take(14_000)
+        // Long pages go in parts: reading starts sooner, and on-device AI has a small input limit.
+        val sections = ArrayList<String>()
+        val sb = StringBuilder()
+        var total = 0
+        for (b in blocks) {
+            if (total > 24_000) break
+            if (sb.isNotEmpty() && sb.length + b.text.length > 4_500) {
+                sections.add(sb.toString())
+                sb.setLength(0)
+            }
+            if (sb.isNotEmpty()) sb.append("\n\n")
+            sb.append(b.text.take(4_500))
+            total += b.text.length
+        }
+        if (sb.isNotEmpty()) sections.add(sb.toString())
+        val prompts = sections.mapIndexed { i, sec ->
+            if (sections.size == 1) "Here is the text on my screen:\n\n$sec"
+            else "Here is part ${i + 1} of ${sections.size} of the text on my screen:\n\n$sec"
+        }
         resume = null
-        start(simplifySystem(), "Here is the text on my screen:\n\n$text", LABEL_SIMPLE, "Simplifying with Gemini…", null, fallback)
+        start(simplifySystem(), prompts, LABEL_SIMPLE, "Simplifying…", null, fallback)
     }
 
     /** Explains the paragraph being read, then returns to the next sentence of the page. */
     fun explainCurrent(screen: List<ScreenBlock>?) {
         if (!hasKey()) {
-            Reader.showMessage("Add your free Gemini key in Yomiage to get simple explanations.")
+            Reader.showMessage("Add a free AI key or turn on on-device AI in Yomiage to get simple explanations.")
             return
         }
         val snap = Reader.snapshot() ?: return
@@ -118,7 +136,7 @@ object Explainer {
             if (before.isNotBlank()) append("For context, the paragraph before it:\n").append(before.take(1500)).append("\n\n")
             append("The passage to explain:\n").append(block.take(4000))
         }
-        start(explainSystem(), user, LABEL_EXPLAIN, "Thinking it through…", back)
+        start(explainSystem(), listOf(user), LABEL_EXPLAIN, "Thinking it through…", back)
     }
 
     /** From an explanation: stop it and go back to the page now. */
@@ -137,26 +155,26 @@ object Explainer {
 
     private fun start(
         system: String,
-        user: String,
+        prompts: List<String>,
         label: String,
         waiting: String,
         back: Resume?,
         fallback: (() -> Unit)? = null,
     ) {
         job?.cancel()
-        val key = Prefs.current.geminiKey
         val id = Reader.read(emptyList(), open = true, label = label, waiting = waiting)
         explainSession = if (label == LABEL_EXPLAIN) id else -1
         resume = back
         job = scope.launch {
             var got = false
             try {
-                withContext(Dispatchers.IO) {
-                    val paragraphs = Paragraphs { p ->
-                        if (Reader.append(id, listOf(TextBlock(p)), done = false)) got = true
-                    }
-                    Gemini.stream(
-                        key, system, user,
+                val paragraphs = Paragraphs { p ->
+                    if (Reader.append(id, listOf(TextBlock(p)), done = false)) got = true
+                }
+                for (prompt in prompts) {
+                    if (Reader.state.value.session != id) break
+                    Ai.stream(
+                        system, prompt,
                         cancelled = { !isActive || Reader.state.value.session != id },
                         onStatus = { msg -> if (!got) Reader.setWaiting(id, msg) },
                     ) {
@@ -165,7 +183,7 @@ object Explainer {
                     paragraphs.flush()
                 }
                 Reader.append(id, emptyList(), done = true)
-                if (!got && Reader.state.value.session == id) Reader.showMessage("Gemini didn't send anything back. Try again.")
+                if (!got && Reader.state.value.session == id) Reader.showMessage("The AI didn't send anything back. Try again.")
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 if (Reader.state.value.session != id) return@launch
@@ -173,7 +191,7 @@ object Explainer {
                     Reader.append(id, emptyList(), done = true)
                     return@launch
                 }
-                val message = if (e is GeminiException) e.message ?: "Gemini didn't answer." else "Something went wrong talking to Gemini."
+                val message = if (e is AiException) e.message ?: "The AI didn't answer." else "Something went wrong talking to the AI."
                 val backTo = resume
                 when {
                     label == LABEL_EXPLAIN && backTo != null -> {
