@@ -47,6 +47,20 @@ data class ReaderState(
     /** The sentence being spoken (null while idle or preparing). */
     val chunk: Chunk? = null,
     val chunkIndex: Int = -1,
+    /** Set for text that isn't on screen: "Simplified" or "Explanation". */
+    val label: String? = null,
+    /** The text being read, for sessions with a [label] (shown in the player's text panel). */
+    val blocks: List<TextBlock> = emptyList(),
+)
+
+/** What's being read right now, so it can be explained and returned to. */
+class Snapshot(
+    val session: Long,
+    val blocks: List<TextBlock>,
+    val chunks: List<Chunk>,
+    val chunkIndex: Int,
+    val fromScreen: Boolean,
+    val label: String?,
 )
 
 /** The word being spoken, as [wordStart, wordEnd) in the current chunk's text. Updated ~10x a second. */
@@ -66,6 +80,7 @@ object Reader {
 
     private lateinit var app: Context
     private val main = Handler(Looper.getMainLooper())
+    @Volatile
     private var session: Session? = null
     private var nextId = 1L
 
@@ -91,6 +106,10 @@ object Reader {
         startChar: Int = 0,
         fromScreen: Boolean = false,
         voice: Voice? = null,
+        /** More text will be added with [append] (e.g. while Gemini is still writing). */
+        open: Boolean = false,
+        label: String? = null,
+        waiting: String? = null,
     ): Long {
         val settings = Prefs.current
         stopSession(keepFocus = true)
@@ -103,11 +122,14 @@ object Reader {
             return id
         }
         val chunks = TextChunker.build(blocks, startBlock, startChar, settings.readUrls)
-        if (chunks.isEmpty()) {
+        if (chunks.isEmpty() && !open) {
             _state.value = ReaderState(status = Status.Error, session = id, message = "There's no text to read here.")
             return id
         }
         val s = Session(id, blocks, chunks, voice ?: Voices.byId(settings.voiceId), fromScreen, settings.speed)
+        s.open = open
+        s.label = label
+        s.waiting = waiting
         session = s
         requestFocus()
         registerNoisy()
@@ -124,6 +146,39 @@ object Reader {
     fun showMessage(text: String) {
         stopSession()
         _state.value = ReaderState(status = Status.Error, message = text, session = nextId++)
+    }
+
+    /** Adds text to an open session. Returns false if that session is no longer the current one. */
+    fun append(id: Long, more: List<TextBlock>, done: Boolean): Boolean {
+        val s = session ?: return false
+        if (s.id != id) return false
+        s.withLock {
+            if (more.isNotEmpty()) {
+                val offset = s.blocks.size
+                val built = TextChunker.build(more, 0, 0, Prefs.current.readUrls, rampFrom = s.n)
+                s.blocks = s.blocks + more
+                for (c in built) {
+                    s.chunks.add(Chunk(c.text, c.block + offset, c.gapMs, c.map))
+                    s.audio.add(null)
+                    s.lengths.add(-1)
+                    s.speechLen.add(1)
+                }
+            }
+            if (done) s.open = false
+            s.publishLocked()
+        }
+        return true
+    }
+
+    fun snapshot(): Snapshot? {
+        val s = session ?: return null
+        return s.withLock {
+            if (s.n == 0) {
+                null
+            } else {
+                Snapshot(s.id, s.blocks, ArrayList(s.chunks), s.heardChunk.coerceIn(0, s.n - 1), s.fromScreen, s.label)
+            }
+        }
     }
 
     fun preview(voice: Voice) {
@@ -198,7 +253,7 @@ object Reader {
         s.withLock {
             s.voice = voice
             s.invalidateAllLocked()
-            s.seekAbsChunk = s.heardChunk.coerceIn(0, s.n - 1)
+            if (s.n > 0) s.seekAbsChunk = s.heardChunk.coerceIn(0, s.n - 1)
         }
     }
 
@@ -289,16 +344,20 @@ object Reader {
 
     private class Session(
         val id: Long,
-        val blocks: List<TextBlock>,
-        val chunks: List<Chunk>,
+        var blocks: List<TextBlock>,
+        chunkList: List<Chunk>,
         var voice: Voice,
         val fromScreen: Boolean,
         var speed: Float,
     ) {
-        val n = chunks.size
-        val audio = arrayOfNulls<ShortArray>(n)
-        val lengths = IntArray(n) { -1 }
-        val speechLen = IntArray(n) { 1 }   // frames of actual speech (without the pause after it)
+        val chunks = ArrayList(chunkList)
+        val n: Int get() = chunks.size
+        val audio = ArrayList<ShortArray?>(chunkList.map { null })
+        val lengths = ArrayList<Int>(chunkList.map { -1 })
+        val speechLen = ArrayList<Int>(chunkList.map { 1 })   // frames of actual speech (without the pause after it)
+        var open = false
+        var label: String? = null
+        var waiting: String? = null
         val lock = ReentrantLock()
         val cond: Condition = lock.newCondition()
 
@@ -374,6 +433,7 @@ object Reader {
             while (true) {
                 var index = -1
                 var text = ""
+                var gapMs = 0
                 var v: Voice = Voices.byId(3)
                 var ep = 0
                 var sp = 1f
@@ -386,6 +446,7 @@ object Reader {
                         cond.await(300, TimeUnit.MILLISECONDS)
                     }
                     text = chunks[index].text
+                    gapMs = chunks[index].gapMs
                     v = voice
                     ep = epoch
                     sp = nativeSpeed
@@ -401,7 +462,7 @@ object Reader {
                     if (samples == null) {
                         error = "The voice pack isn't installed."
                     } else {
-                        val gap = SR * chunks[index].gapMs / 1000
+                        val gap = SR * gapMs / 1000
                         pcm = toPcm(samples, gap)
                         speech = (pcm.size - gap).coerceAtLeast(1)
                     }
@@ -497,7 +558,7 @@ object Reader {
                 if (abs(nativeSpeed - speed) > 0.01f) {
                     nativeSpeed = speed
                     invalidateAllLocked()
-                    seekAbsChunk = heardChunk.coerceIn(0, n - 1)
+                    if (n > 0) seekAbsChunk = heardChunk.coerceIn(0, n - 1)
                 }
             }
         }
@@ -559,6 +620,11 @@ object Reader {
                         if (stopped) return
                         val track = t!!
 
+                        if ((seekAbsChunk >= 0 || seekRelPending) && n == 0) {
+                            seekAbsChunk = -1
+                            seekRelPending = false
+                            seekRel = 0
+                        }
                         if (seekAbsChunk >= 0 || seekRelPending) {
                             updateHeardLocked(track)
                             val target: Pair<Int, Int> = when {
@@ -613,6 +679,16 @@ object Reader {
                             continue
                         }
 
+                        if (wChunk >= n && open) {
+                            // Waiting for more text (Gemini is still writing).
+                            updateHeardLocked(track)
+                            if (headFrames(track) >= written) {
+                                status = if (written == 0L) Status.Preparing else Status.Buffering
+                                publishLocked()
+                            }
+                            cond.await(100, TimeUnit.MILLISECONDS)
+                            continue
+                        }
                         if (wChunk >= n) {
                             // Everything is written: let the track play out, then finish.
                             val now = SystemClock.elapsedRealtime()
@@ -712,6 +788,7 @@ object Reader {
             val idx = heardChunk.coerceIn(0, max(0, n - 1))
             val chunk = chunks.getOrNull(idx)
             val caption = when {
+                n == 0 -> waiting ?: "Getting ready…"
                 status == Status.Preparing && loadingModel -> "Warming up the voice…"
                 status == Status.Preparing -> chunk?.text ?: ""
                 else -> chunk?.text ?: ""
@@ -729,6 +806,8 @@ object Reader {
                 session = id,
                 chunk = if (speaking || status == Status.Finished) chunk else null,
                 chunkIndex = if (speaking) idx else -1,
+                label = label,
+                blocks = if (label != null) blocks else emptyList(),
             )
             if (st != lastPublished) {
                 lastPublished = st

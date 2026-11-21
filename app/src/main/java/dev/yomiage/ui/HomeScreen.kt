@@ -56,6 +56,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,12 +67,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.yomiage.BuildConfigInfo
 import dev.yomiage.R
+import dev.yomiage.ai.Explainer
+import dev.yomiage.ai.Gemini
+import dev.yomiage.ai.GeminiException
 import dev.yomiage.data.Accent
 import dev.yomiage.data.BubbleMode
 import dev.yomiage.data.HighlightMode
@@ -79,6 +85,7 @@ import dev.yomiage.data.Prefs
 import dev.yomiage.data.Settings as YSettings
 import dev.yomiage.data.Voice
 import dev.yomiage.data.Voices
+import dev.yomiage.overlay.PlayerActions
 import dev.yomiage.overlay.PlayerBar
 import dev.yomiage.overlay.speedLabel
 import dev.yomiage.reader.Reader
@@ -90,6 +97,9 @@ import dev.yomiage.tile.TapTileService
 import dev.yomiage.tts.ModelManager
 import dev.yomiage.tts.ModelStatus
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val SAMPLE = "Yomiage reads whatever is on your screen with natural Kokoro voices. " +
     "Tap the bubble to read a whole page, or tap a spot to start right there. " +
@@ -166,7 +176,16 @@ fun HomeScreen(pendingText: MutableState<String?>) {
                         Spacer(Modifier.width(6.dp))
                         Text("Read this")
                     }
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { Explainer.readSimplified(TextChunker.paragraphs(text)) },
+                        enabled = modelReady && text.isNotBlank() && settings.geminiKey.isNotBlank(),
+                    ) {
+                        Icon(painterResource(R.drawable.ic_sparkle), null, tint = Seal, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Simplify", color = PaperWhite)
+                    }
+                    Spacer(Modifier.width(4.dp))
                     TextButton(onClick = { text = "" }) { Text("Clear", color = Faint) }
                 }
                 if (!running && reader.status != Status.Idle) {
@@ -175,22 +194,20 @@ fun HomeScreen(pendingText: MutableState<String?>) {
                     PlayerBar(
                         state = reader,
                         progress = progress,
-                        onPlayPause = { Reader.togglePlay() },
-                        onSeek = { Reader.seekBy(it) },
-                        onSpeed = { Reader.setSpeed(it) },
-                        onTapMode = {
-                            Toast.makeText(context, "Turn on screen reading first", Toast.LENGTH_SHORT).show()
-                        },
-                        onClose = { Reader.stop() },
-                        onOpenApp = { Reader.stop() },
-                        onDrag = {},
-                        onDragEnd = {},
+                        actions = PlayerActions(
+                            onOpenApp = { Reader.stop() },
+                            onExplain = { Explainer.explainCurrent(null) },
+                            onBackToPage = { Explainer.backToPage() },
+                            onToggleText = { Prefs.update { it.copy(showText = !it.showText) } },
+                        ),
+                        showText = settings.showText,
                     )
                 }
             }
         }
 
         StartSection(context, settings)
+        SimpleSection(context, settings)
         VoiceSection(settings, modelReady)
         ReadingSection(settings)
         AdvancedSection(context, settings, modelReady)
@@ -521,6 +538,102 @@ private fun openAdvancedFeatures(context: Context) {
         )
     } catch (e: Exception) {
         open(context, Intent(Settings.ACTION_SETTINGS))
+    }
+}
+
+// -------------------------------------------------------------------- simple explanations
+
+@Composable
+private fun SimpleSection(context: Context, settings: YSettings) {
+    val scope = rememberCoroutineScope()
+    var showKey by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
+    SectionLabel("Simple explanations")
+    Group {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "Breaks hard passages down into plain language. Tap ✦ in the player to hear the paragraph you're on " +
+                    "explained, and then it goes back to the page. Or long-press the bubble and choose Read simplified to hear " +
+                    "the whole page rewritten simply. This uses Google's Gemini over the internet with your own free key.",
+                color = Color(0xFFD9D1C8), fontSize = 13.sp, lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+            Text("1. Get a free key", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Sign in to Google AI Studio, tap Create API key, and copy it.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            StepButton("Open Google AI Studio", outlined = true) {
+                open(context, Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
+            }
+            Spacer(Modifier.height(14.dp))
+            Text("2. Paste it here", color = PaperWhite, fontSize = 15.sp)
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = settings.geminiKey,
+                onValueChange = { v -> Prefs.update { it.copy(geminiKey = v.trim()) } },
+                singleLine = true,
+                placeholder = { Text("Gemini API key", color = Faint) },
+                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Hide" else "Show", color = Faint) }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Seal,
+                    unfocusedBorderColor = Color(0xFF3A3530),
+                    cursorColor = Seal,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            StepButton(if (testing) "Checking…" else "Test key") {
+                if (testing) return@StepButton
+                if (settings.geminiKey.isBlank()) {
+                    Toast.makeText(context, "Paste your key first", Toast.LENGTH_SHORT).show()
+                    return@StepButton
+                }
+                testing = true
+                scope.launch {
+                    val error = withContext(Dispatchers.IO) {
+                        try {
+                            Gemini.test(settings.geminiKey)
+                            null
+                        } catch (e: GeminiException) {
+                            e.message
+                        }
+                    }
+                    testing = false
+                    Toast.makeText(context, error ?: "Your key works", Toast.LENGTH_LONG).show()
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Text("Explain things for (optional)", color = PaperWhite, fontSize = 15.sp)
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = settings.audience,
+                onValueChange = { v -> Prefs.update { it.copy(audience = v) } },
+                singleLine = true,
+                placeholder = { Text("e.g. a nursing student, a beginner", color = Faint) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Seal,
+                    unfocusedBorderColor = Color(0xFF3A3530),
+                    cursorColor = Seal,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "On Gemini's free tier, Google may use what you send to improve its products, so avoid it for private documents.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+        }
+        Divider()
+        SwitchRow(
+            "Always read the screen simplified",
+            "The bubble, tiles and Read My Screen read the plain-language version instead of the original.",
+            settings.alwaysSimple,
+        ) { on -> Prefs.update { it.copy(alwaysSimple = on) } }
     }
 }
 

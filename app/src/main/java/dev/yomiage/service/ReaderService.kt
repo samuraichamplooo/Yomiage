@@ -11,6 +11,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.yomiage.MainActivity
+import dev.yomiage.ai.Explainer
 import dev.yomiage.data.Prefs
 import dev.yomiage.data.Voices
 import dev.yomiage.overlay.Overlay
@@ -60,6 +61,8 @@ class ReaderService : AccessibilityService() {
     private var finishedJob: Job? = null
     private var foregroundJob: Job? = null
     private val foreground = MutableStateFlow<String?>(null)
+    private var screenSession = -1L
+    private var screenBlocks: List<ScreenBlock> = emptyList()
 
     private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
         override fun onClicked(controller: AccessibilityButtonController) {
@@ -77,6 +80,7 @@ class ReaderService : AccessibilityService() {
         follow = f
         val o = Overlay(this, f)
         overlay = o
+        Explainer.onScreenResumed = { id, blocks -> attachScreen(id, blocks) }
         try {
             accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
         } catch (e: Exception) {
@@ -144,6 +148,7 @@ class ReaderService : AccessibilityService() {
         } catch (_: Exception) {
         }
         scope.cancel()
+        Explainer.onScreenResumed = null
         overlay?.destroy()
         overlay = null
         follow = null
@@ -225,8 +230,23 @@ class ReaderService : AccessibilityService() {
         }
     }
 
-    /** Reads everything on screen from the top. With [ocr], reads the pixels instead of the app's text. */
-    fun readScreen(ocr: Boolean) {
+    private fun attachScreen(id: Long, blocks: List<ScreenBlock>) {
+        screenSession = id
+        screenBlocks = blocks
+        follow?.attach(id, blocks)
+    }
+
+    /** Explains the paragraph being read in plain language, then carries on with the page. */
+    fun explainCurrent() {
+        val st = Reader.state.value
+        Explainer.explainCurrent(if (st.fromScreen && st.session == screenSession) screenBlocks else null)
+    }
+
+    /**
+     * Reads everything on screen from the top. With [ocr], reads the pixels instead of the app's text.
+     * With [simple], Gemini rewrites it in plain language first.
+     */
+    fun readScreen(ocr: Boolean, simple: Boolean = Prefs.current.alwaysSimple && Explainer.hasKey()) {
         overlay?.closeMenu()
         if (!ModelManager.isReady(this)) {
             Reader.showMessage("Download the Kokoro voices in Yomiage first.")
@@ -250,8 +270,12 @@ class ReaderService : AccessibilityService() {
                 Reader.showMessage("I couldn't find any text on this screen.")
                 return@launch
             }
-            val id = Reader.read(blocks.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
-            follow?.attach(id, blocks)
+            if (simple) {
+                Explainer.readSimplified(blocks.map { TextBlock(it.text) })
+            } else {
+                val id = Reader.read(blocks.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
+                attachScreen(id, blocks)
+            }
         }
     }
 
@@ -286,7 +310,7 @@ class ReaderService : AccessibilityService() {
                 blocks.map { TextBlock(it.text, it.bounds) },
                 startBlock = block, startChar = offset, fromScreen = true,
             )
-            follow?.attach(id, blocks)
+            attachScreen(id, blocks)
         }
     }
 

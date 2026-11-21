@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
+import dev.yomiage.ai.Explainer
 import dev.yomiage.data.BubbleMode
 import dev.yomiage.data.Browsers
 import dev.yomiage.data.HighlightMode
@@ -118,7 +119,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
         }
         closeMenu()
         bar?.let {
-            clampBar(it.params)
+            placeBar(it.params, barMini)
             relayout(it)
         }
     }
@@ -252,9 +253,10 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
         p.y = (b.params.y - dp(60)).coerceIn(dp(40), (s.height() - dp(340)).coerceAtLeast(dp(40)))
         val w = add(p) {
             MenuContent(
-                onRead = { service.readScreen(ocr = false) },
+                onRead = { service.readScreen(ocr = false, simple = false) },
+                onSimple = { service.readScreen(ocr = false, simple = true) },
                 onTap = { service.startTapMode() },
-                onScan = { service.readScreen(ocr = true) },
+                onScan = { service.readScreen(ocr = true, simple = false) },
                 onHide = {
                     closeMenu()
                     Prefs.update { it.copy(bubbleMode = BubbleMode.OFF) }
@@ -288,6 +290,22 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
 
     // ---------------------------------------------------------------- player bar
 
+    private var barMini = false
+
+    private fun placeBar(p: LayoutParams, mini: Boolean) {
+        val st = Prefs.current
+        if (mini) {
+            p.gravity = Gravity.BOTTOM or Gravity.END
+            p.x = dp(st.miniXdp)
+            p.y = dp(st.miniYdp)
+        } else {
+            p.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            p.x = 0
+            p.y = dp(st.barYdp)
+        }
+        clampBar(p, mini)
+    }
+
     private fun showBar() {
         if (highlight == null) {
             val hp = params(
@@ -296,37 +314,56 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             )
             highlight = add(hp) { FollowAlongLayer() }
         }
-        if (bar != null) return
+        val existing = bar
+        if (existing != null) {
+            val mini = Prefs.current.playerMini
+            if (mini != barMini) {
+                barMini = mini
+                placeBar(existing.params, mini)
+                relayout(existing)
+            }
+            return
+        }
+        barMini = Prefs.current.playerMini
         val p = params(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, 0)
-        p.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-        p.y = dp(Prefs.current.barYdp)
+        placeBar(p, barMini)
         val w = Win(ComposeView(service), p, OverlayOwner())
         w.owner.attachTo(w.view)
+        val actions = PlayerActions(
+            onOpenApp = {
+                Reader.stop()
+                service.openApp()
+            },
+            onTapMode = { service.startTapMode() },
+            onExplain = { service.explainCurrent() },
+            onBackToPage = { Explainer.backToPage() },
+            onMinimize = { Prefs.update { it.copy(playerMini = true) } },
+            onExpand = { Prefs.update { it.copy(playerMini = false) } },
+            onToggleText = { Prefs.update { it.copy(showText = !it.showText) } },
+            onDrag = { dx, dy ->
+                if (barMini) w.params.x = (w.params.x - dx).toInt()
+                w.params.y = (w.params.y - dy).toInt()
+                clampBar(w.params, barMini)
+                relayout(w)
+            },
+            onDragEnd = {
+                val d = service.resources.displayMetrics.density
+                if (barMini) {
+                    Prefs.update { it.copy(miniXdp = (w.params.x / d).toInt(), miniYdp = (w.params.y / d).toInt()) }
+                } else {
+                    Prefs.update { it.copy(barYdp = (w.params.y / d).toInt()) }
+                }
+            },
+        )
         w.view.setContent {
             val st by Reader.state.collectAsState()
             val progress by Reader.progress.collectAsState()
-            PlayerBar(
-                state = st,
-                progress = progress,
-                onPlayPause = { Reader.togglePlay() },
-                onSeek = { Reader.seekBy(it) },
-                onSpeed = { Reader.setSpeed(it) },
-                onTapMode = { service.startTapMode() },
-                onClose = { Reader.stop() },
-                onOpenApp = {
-                    Reader.stop()
-                    service.openApp()
-                },
-                onDrag = { dy ->
-                    w.params.y = (w.params.y - dy).toInt()
-                    clampBar(w.params)
-                    relayout(w)
-                },
-                onDragEnd = {
-                    val d = service.resources.displayMetrics.density
-                    Prefs.update { it.copy(barYdp = (w.params.y / d).toInt()) }
-                },
-            )
+            val settings by Prefs.settings.collectAsState()
+            if (settings.playerMini) {
+                MiniPlayer(st, actions)
+            } else {
+                PlayerBar(st, progress, actions, showText = settings.showText)
+            }
         }
         wm.addView(w.view, p)
         bar = w
@@ -363,9 +400,14 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
         HighlightLayer(sentence, word, null)
     }
 
-    private fun clampBar(p: LayoutParams) {
+    private fun clampBar(p: LayoutParams, mini: Boolean) {
         val s = ScreenScanner.screenBounds(service)
-        p.y = p.y.coerceIn(0, (s.height() - dp(260)).coerceAtLeast(0))
+        if (mini) {
+            p.x = p.x.coerceIn(0, (s.width() - dp(150)).coerceAtLeast(0))
+            p.y = p.y.coerceIn(0, (s.height() - dp(90)).coerceAtLeast(0))
+        } else {
+            p.y = p.y.coerceIn(0, (s.height() - dp(260)).coerceAtLeast(0))
+        }
     }
 
     private fun hideBar() {

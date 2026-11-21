@@ -114,7 +114,13 @@ object TextChunker {
      * of that sentence). The first chunks are kept short so speech starts quickly; later ones are
      * whole sentences.
      */
-    fun build(blocks: List<TextBlock>, startBlock: Int, startChar: Int, readUrls: Boolean): List<Chunk> {
+    fun build(
+        blocks: List<TextBlock>,
+        startBlock: Int,
+        startChar: Int,
+        readUrls: Boolean,
+        rampFrom: Int = 0,
+    ): List<Chunk> {
         val out = ArrayList<Chunk>()
         val bi = BreakIterator.getSentenceInstance(Locale.getDefault())
         for (b in startBlock.coerceAtLeast(0) until blocks.size) {
@@ -153,8 +159,8 @@ object TextChunker {
                 val lastInBlock = ri == ranges.size - 1
                 var s = range[0]
                 val e = range[1]
-                while (e - s > maxLen(out.size)) {
-                    val cut = s + findCut(text.substring(s, e), maxLen(out.size))
+                while (e - s > maxLen(rampFrom + out.size)) {
+                    val cut = s + findCut(text.substring(s, e), maxLen(rampFrom + out.size))
                     val p = trim(text, s, cut)
                     if (p != null && speakable(text.substring(p[0], p[1]))) {
                         out.add(Chunk(text.substring(p[0], p[1]), b, GAP_SPLIT, map.copyOfRange(p[0], p[1])))

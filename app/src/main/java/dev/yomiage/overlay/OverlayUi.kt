@@ -22,11 +22,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +41,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.yomiage.R
 import dev.yomiage.reader.Progress
+import dev.yomiage.reader.Reader
 import dev.yomiage.reader.ReaderState
 import dev.yomiage.reader.Status
 import java.util.Locale
@@ -92,7 +98,14 @@ fun BubbleContent(faded: Boolean) {
 }
 
 @Composable
-fun MenuContent(onRead: () -> Unit, onTap: () -> Unit, onScan: () -> Unit, onHide: () -> Unit, onOpen: () -> Unit) {
+fun MenuContent(
+    onRead: () -> Unit,
+    onSimple: () -> Unit,
+    onTap: () -> Unit,
+    onScan: () -> Unit,
+    onHide: () -> Unit,
+    onOpen: () -> Unit,
+) {
     Surface(
         shape = RoundedCornerShape(22.dp),
         color = Ink.copy(alpha = 0.97f),
@@ -102,6 +115,7 @@ fun MenuContent(onRead: () -> Unit, onTap: () -> Unit, onScan: () -> Unit, onHid
     ) {
         Column(Modifier.width(IntrinsicSize.Max).padding(vertical = 6.dp)) {
             MenuRow(R.drawable.ic_lines, "Read screen", onRead)
+            MenuRow(R.drawable.ic_sparkle, "Read simplified", onSimple)
             MenuRow(R.drawable.ic_tap, "Tap to start", onTap)
             MenuRow(R.drawable.ic_scan, "Scan text in images", onScan)
             HorizontalDivider(color = Hairline, modifier = Modifier.padding(vertical = 4.dp))
@@ -126,22 +140,51 @@ private fun MenuRow(icon: Int, label: String, onClick: () -> Unit) {
     }
 }
 
+/** Everything the player can do. Optional actions are hidden when null. */
+class PlayerActions(
+    val onPlayPause: () -> Unit = { Reader.togglePlay() },
+    val onSeek: (Float) -> Unit = { Reader.seekBy(it) },
+    val onSpeed: (Float) -> Unit = { Reader.setSpeed(it) },
+    val onClose: () -> Unit = { Reader.stop() },
+    val onOpenApp: () -> Unit = {},
+    val onTapMode: (() -> Unit)? = null,
+    val onExplain: (() -> Unit)? = null,
+    val onBackToPage: (() -> Unit)? = null,
+    val onMinimize: (() -> Unit)? = null,
+    val onExpand: () -> Unit = {},
+    val onToggleText: (() -> Unit)? = null,
+    val onDrag: (Float, Float) -> Unit = { _, _ -> },
+    val onDragEnd: () -> Unit = {},
+)
+
+/** A drag handle that reports finger movement in screen pixels. */
+private fun Modifier.dragHandle(actions: PlayerActions, last: FloatArray): Modifier =
+    pointerInteropFilter { e ->
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                last[0] = e.rawX
+                last[1] = e.rawY
+            }
+            MotionEvent.ACTION_MOVE -> {
+                actions.onDrag(e.rawX - last[0], e.rawY - last[1])
+                last[0] = e.rawX
+                last[1] = e.rawY
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> actions.onDragEnd()
+        }
+        true
+    }
+
 /** The floating player: what's being read, ±2 s / ±5 s, play/pause and speed. */
 @Composable
 fun PlayerBar(
     state: ReaderState,
     progress: Progress,
-    onPlayPause: () -> Unit,
-    onSeek: (Float) -> Unit,
-    onSpeed: (Float) -> Unit,
-    onTapMode: () -> Unit,
-    onClose: () -> Unit,
-    onOpenApp: () -> Unit,
-    onDrag: (Float) -> Unit,
-    onDragEnd: () -> Unit,
+    actions: PlayerActions,
+    showText: Boolean = false,
 ) {
     var showSpeed by remember { mutableStateOf(false) }
-    val lastY = remember { FloatArray(1) }
+    val last = remember { FloatArray(2) }
     Surface(
         shape = RoundedCornerShape(26.dp),
         color = Ink.copy(alpha = 0.96f),
@@ -158,17 +201,7 @@ fun PlayerBar(
                 Modifier
                     .fillMaxWidth()
                     .height(20.dp)
-                    .pointerInteropFilter { e ->
-                        when (e.actionMasked) {
-                            MotionEvent.ACTION_DOWN -> lastY[0] = e.rawY
-                            MotionEvent.ACTION_MOVE -> {
-                                onDrag(e.rawY - lastY[0])
-                                lastY[0] = e.rawY
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> onDragEnd()
-                        }
-                        true
-                    },
+                    .dragHandle(actions, last),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(
@@ -190,6 +223,24 @@ fun PlayerBar(
                         .height(2.dp),
                 )
             }
+            if (state.label != null) {
+                Row(Modifier.padding(top = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painterResource(R.drawable.ic_sparkle), null, tint = Vermilion, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(state.label, color = Vermilion, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.weight(1f))
+                    actions.onToggleText?.let {
+                        Pill(if (showText) "Hide text" else "Show text", onClick = it)
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    actions.onBackToPage?.let { back ->
+                        if (state.label == "Explanation") Pill("Back to page", accent = true, onClick = back)
+                    }
+                }
+            }
+            if (showText && state.label != null && state.blocks.isNotEmpty()) {
+                TextPanel(state, progress)
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val caption = when {
                     state.status == Status.Error -> AnnotatedString(state.message ?: "Something went wrong.")
@@ -208,9 +259,15 @@ fun PlayerBar(
                         .padding(vertical = 8.dp),
                 )
                 if (state.status != Status.Error) {
-                    SmallIcon(R.drawable.ic_tap, "Read from a spot you tap", onTapMode)
+                    actions.onTapMode?.let { SmallIcon(R.drawable.ic_tap, "Read from a spot you tap", it) }
+                    actions.onExplain?.let {
+                        if (state.label != "Explanation" && state.chunk != null) {
+                            SmallIcon(R.drawable.ic_sparkle, "Explain this simply", it, tint = Vermilion)
+                        }
+                    }
                 }
-                SmallIcon(R.drawable.ic_close, "Stop", onClose)
+                actions.onMinimize?.let { SmallIcon(R.drawable.ic_minimize, "Shrink the player", it) }
+                SmallIcon(R.drawable.ic_close, "Stop", actions.onClose)
             }
             if (state.status == Status.Error) {
                 Text(
@@ -220,7 +277,7 @@ fun PlayerBar(
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable(onClick = onOpenApp)
+                        .clickable(onClick = actions.onOpenApp)
                         .padding(vertical = 8.dp, horizontal = 4.dp),
                 )
             } else {
@@ -229,31 +286,149 @@ fun PlayerBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    SeekButton(R.drawable.ic_rewind, "5", "Back 5 seconds") { onSeek(-5f) }
-                    SeekButton(R.drawable.ic_rewind, "2", "Back 2 seconds") { onSeek(-2f) }
-                    PlayButton(state.status, onPlayPause)
-                    SeekButton(R.drawable.ic_forward, "2", "Forward 2 seconds") { onSeek(2f) }
-                    SeekButton(R.drawable.ic_forward, "5", "Forward 5 seconds") { onSeek(5f) }
+                    SeekButton(R.drawable.ic_rewind, "5", "Back 5 seconds") { actions.onSeek(-5f) }
+                    SeekButton(R.drawable.ic_rewind, "2", "Back 2 seconds") { actions.onSeek(-2f) }
+                    PlayButton(state.status, actions.onPlayPause)
+                    SeekButton(R.drawable.ic_forward, "2", "Forward 2 seconds") { actions.onSeek(2f) }
+                    SeekButton(R.drawable.ic_forward, "5", "Forward 5 seconds") { actions.onSeek(5f) }
                     SpeedChip(state.speed, showSpeed) { showSpeed = !showSpeed }
                 }
                 AnimatedVisibility(showSpeed) {
-                    SpeedRow(state.speed, onSpeed)
+                    SpeedRow(state.speed, actions.onSpeed)
                 }
             }
         }
     }
 }
 
+/** The shrunk player: drag grip, play/pause with a progress ring, and expand. */
 @Composable
-private fun SmallIcon(icon: Int, description: String, onClick: () -> Unit) {
+fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
+    val last = remember { FloatArray(2) }
+    Surface(
+        shape = RoundedCornerShape(30.dp),
+        color = Ink.copy(alpha = 0.9f),
+        border = BorderStroke(1.dp, Hairline),
+        shadowElevation = 8.dp,
+        modifier = Modifier.padding(6.dp),
+    ) {
+        Row(Modifier.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(width = 22.dp, height = 48.dp)
+                    .dragHandle(actions, last),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(painterResource(R.drawable.ic_drag), "Move", tint = Muted, modifier = Modifier.size(18.dp))
+            }
+            val playing = state.status == Status.Playing || state.status == Status.Buffering || state.status == Status.Preparing
+            Box(
+                Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Vermilion)
+                    .clickable(onClick = actions.onPlayPause),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (state.total > 0) {
+                    CircularProgressIndicator(
+                        progress = { (state.index.toFloat() / state.total).coerceIn(0f, 1f) },
+                        color = Paper,
+                        trackColor = Color(0x33FFFFFF),
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(44.dp),
+                    )
+                }
+                Icon(
+                    painterResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play),
+                    if (playing) "Pause" else "Play",
+                    tint = Paper,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            SmallIcon(R.drawable.ic_expand, "Show the full player", actions.onExpand)
+        }
+    }
+}
+
+/** The simplified text or explanation, with the sentence being read marked. Scrolls along. */
+@Composable
+private fun TextPanel(state: ReaderState, progress: Progress) {
+    val chunk = state.chunk
+    val list = rememberLazyListState()
+    LaunchedEffect(chunk?.block) {
+        if (chunk != null) list.animateScrollToItem(chunk.block.coerceAtLeast(0))
+    }
+    LazyColumn(
+        state = list,
+        modifier = Modifier
+            .padding(top = 8.dp, end = 8.dp)
+            .fillMaxWidth()
+            .heightIn(max = 220.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0x12FFFFFF))
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        itemsIndexed(state.blocks) { i, b ->
+            val text = if (chunk != null && chunk.block == i && chunk.map.isNotEmpty()) {
+                val s0 = chunk.map.first().coerceIn(0, b.text.length)
+                val e0 = (chunk.map.last() + 1).coerceIn(s0, b.text.length)
+                buildAnnotatedString {
+                    append(b.text.substring(0, s0))
+                    withStyle(SpanStyle(background = Vermilion.copy(alpha = 0.22f))) {
+                        val ws = progress.wordStart
+                        val we = progress.wordEnd
+                        if (progress.session == state.session && progress.chunkIndex == state.chunkIndex &&
+                            ws >= 0 && we <= chunk.map.size && ws < we
+                        ) {
+                            val a = chunk.map[ws].coerceIn(s0, e0)
+                            val z = (chunk.map[we - 1] + 1).coerceIn(a, e0)
+                            append(b.text.substring(s0, a))
+                            withStyle(SpanStyle(background = Vermilion.copy(alpha = 0.6f))) { append(b.text.substring(a, z)) }
+                            append(b.text.substring(z, e0))
+                        } else {
+                            append(b.text.substring(s0, e0))
+                        }
+                    }
+                    append(b.text.substring(e0))
+                }
+            } else {
+                AnnotatedString(b.text)
+            }
+            Text(
+                text,
+                color = Paper,
+                fontSize = 15.sp,
+                lineHeight = 22.sp,
+                modifier = Modifier.padding(vertical = 6.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun Pill(label: String, accent: Boolean = false, onClick: () -> Unit) {
     Box(
         Modifier
-            .size(40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (accent) Vermilion else Color(0x1AFFFFFF))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    ) {
+        Text(label, color = Paper, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun SmallIcon(icon: Int, description: String, onClick: () -> Unit, tint: Color = Muted) {
+    Box(
+        Modifier
+            .size(38.dp)
             .clip(CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(icon), description, tint = Muted, modifier = Modifier.size(20.dp))
+        Icon(painterResource(icon), description, tint = tint, modifier = Modifier.size(20.dp))
     }
 }
 
