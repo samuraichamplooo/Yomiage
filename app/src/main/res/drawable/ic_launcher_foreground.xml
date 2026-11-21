@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Vermilion seal (hanko) -->
+    <path
+        android:fillColor="#FFD8462B"
+        android:pathData="M54,24a30,30 0,1 1,0 60a30,30 0,1 1,0 -60z" />
+    <!-- Lines of text -->
+    <path
+        android:strokeColor="#FFF3EDE4"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:pathData="M36,45.5H55M36,54H51M36,62.5H47" />
+    <!-- Voice -->
+    <path
+        android:strokeColor="#FFF3EDE4"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M58.6,49.4A6.5,6.5 0,0 1,58.6 58.6M63.2,44.8A13,13 0,0 1,63.2 63.2" />
+</vector>

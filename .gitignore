@@ -1,0 +1,11 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.kotlin/
+# Native libraries are downloaded by the GitHub Actions build (see .github/workflows/build.yml).
+app/src/main/jniLibs/
