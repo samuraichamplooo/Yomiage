@@ -1,41 +1,24 @@
 package dev.yomiage.ui
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import dev.yomiage.theme.Look
 
-// Sumi ink, washi paper and a vermilion seal.
-val InkBlack = Color(0xFF0E0D0C)
-val Card = Color(0xFF181614)
-val CardHigh = Color(0xFF221F1C)
-val PaperWhite = Color(0xFFF3EDE4)
-val Seal = Color(0xFFD8462B)
-val Faint = Color(0xFF9A928A)
-
-private val scheme = darkColorScheme(
-    primary = Seal,
-    onPrimary = PaperWhite,
-    primaryContainer = Color(0xFF5A1E12),
-    onPrimaryContainer = Color(0xFFFFDAD2),
-    secondary = Color(0xFFE7BDB2),
-    onSecondary = Color(0xFF442A23),
-    background = InkBlack,
-    onBackground = PaperWhite,
-    surface = InkBlack,
-    onSurface = PaperWhite,
-    surfaceVariant = CardHigh,
-    onSurfaceVariant = Color(0xFFD1C7BE),
-    outline = Color(0xFF6E6760),
-    outlineVariant = Color(0xFF2E2A26),
-    surfaceContainerLowest = InkBlack,
-    surfaceContainerLow = Color(0xFF141210),
-    surfaceContainer = Card,
-    surfaceContainerHigh = CardHigh,
-    surfaceContainerHighest = Color(0xFF2B2724),
-)
+// The app's colors come from the chosen look (classic sumi ink and vermilion, Material You, or glass).
+val InkBlack: Color get() = Look.appBackground()
+val Card: Color get() = Look.palette.card
+val CardHigh: Color get() = Look.palette.cardHigh
+val PaperWhite: Color get() = Look.palette.text
+val Seal: Color get() = Look.palette.accent
+val OnSeal: Color get() = Look.palette.onAccent
+val Faint: Color get() = Look.palette.muted
+val SoftText: Color get() = Look.palette.textSoft
+val Line: Color get() = Look.palette.outline
+val Good: Color get() = Look.palette.good
+val Bad: Color get() = Look.palette.bad
 
 @Composable
 fun YomiageTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = scheme, content = content)
+    MaterialTheme(colorScheme = Look.scheme, content = content)
 }

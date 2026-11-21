@@ -35,6 +35,7 @@ data class Settings(
     val explainVisuals: Boolean = true, // read tables row by row and explain pictures/diagrams with AI
     val openView: Boolean = false,      // open the reading view whenever a page starts reading
     val viewTextSp: Int = 19,           // text size in the reading view
+    val theme: Int = 0,                 // ThemeKind: classic, Material You or liquid glass
 )
 
 object HighlightMode {
@@ -106,6 +107,7 @@ object Prefs {
             explainVisuals = sp.getBoolean("explainVisuals", d.explainVisuals),
             openView = sp.getBoolean("openView", d.openView),
             viewTextSp = sp.getInt("viewTextSp", d.viewTextSp),
+            theme = sp.getInt("theme", d.theme),
         )
     }
 
@@ -142,6 +144,7 @@ object Prefs {
             .putBoolean("explainVisuals", s.explainVisuals)
             .putBoolean("openView", s.openView)
             .putInt("viewTextSp", s.viewTextSp)
+            .putInt("theme", s.theme)
             .apply()
     }
 }

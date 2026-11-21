@@ -65,6 +65,9 @@ import dev.yomiage.reader.ReaderState
 import dev.yomiage.reader.Snapshot
 import dev.yomiage.reader.Status
 import dev.yomiage.service.ReaderService
+import dev.yomiage.theme.Look
+import dev.yomiage.theme.Styled
+import dev.yomiage.ui.YomiageTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -74,15 +77,16 @@ object ReadingView {
     val open: StateFlow<Boolean> = _open
 }
 
-private val Ink = Color(0xFF141211)
-private val Page = Color(0xFF1B1916)
-private val Paper = Color(0xFFF3EDE4)
-private val Soft = Color(0xFFD9D1C8)
-private val Muted = Color(0xFF9A928A)
-private val Vermilion = Color(0xFFD8462B)
-private val Sentence = Color(0x40D8462B)
-private val Word = Color(0x59D8462B)
-private val Card = Color(0xFF221F1C)
+// Colors follow the chosen look (classic, Material You or glass).
+private val Ink: Color get() = Look.appBackground()
+private val Page: Color get() = Look.palette.card
+private val Paper: Color get() = Look.palette.text
+private val Soft: Color get() = Look.palette.textSoft
+private val Muted: Color get() = Look.palette.muted
+private val Vermilion: Color get() = Look.palette.accent
+private val Sentence: Color get() = Look.palette.accent.copy(alpha = 0.22f)
+private val Word: Color get() = Look.palette.accent.copy(alpha = 0.32f)
+private val Card: Color get() = Look.palette.cardHigh
 
 /**
  * The text being read, laid out cleanly like a book: big readable type, the sentence being spoken
@@ -92,7 +96,15 @@ private val Card = Color(0xFF221F1C)
 class ReadingViewActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { ReadingScreen(onBack = { backToPage() }) }
+        setContent {
+            Styled(this)
+            YomiageTheme { ReadingScreen(onBack = { backToPage() }) }
+        }
+    }
+
+    override fun onDestroy() {
+        Look.releaseWindow(this)
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -248,7 +260,7 @@ private fun SizeButton(label: String, textSp: Int, onClick: () -> Unit) {
 @Composable
 private fun Pill(label: String, onClick: () -> Unit) {
     Surface(shape = RoundedCornerShape(20.dp), color = Vermilion, modifier = Modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick)) {
-        Text(label, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp))
+        Text(label, color = Look.palette.onAccent, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp))
     }
 }
 
@@ -307,7 +319,7 @@ private fun highlighted(text: String, chunk: Chunk?, progress: Progress?, mode: 
                 addStyle(
                     SpanStyle(
                         background = Word, textDecoration = TextDecoration.Underline,
-                        fontWeight = FontWeight.SemiBold, color = Color.White,
+                        fontWeight = FontWeight.SemiBold, color = Paper,
                     ),
                     ws, we + 1,
                 )

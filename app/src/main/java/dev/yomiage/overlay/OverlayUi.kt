@@ -7,6 +7,7 @@ import android.os.Looper
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -79,17 +80,28 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.yomiage.R
+import dev.yomiage.theme.Look
 import dev.yomiage.reader.Progress
 import dev.yomiage.reader.Reader
 import dev.yomiage.reader.ReaderState
 import dev.yomiage.reader.Status
 import java.util.Locale
 
-val Ink = Color(0xFF141211)
-val Paper = Color(0xFFF3EDE4)
-val Vermilion = Color(0xFFD8462B)
-val Muted = Color(0xFF9A928A)
-private val Hairline = Color(0x26FFFFFF)
+// Colors follow the chosen look (classic sumi ink and vermilion, Material You, or liquid glass).
+val Ink: Color get() = Look.palette.surface
+val Paper: Color get() = Look.palette.text
+val Vermilion: Color get() = Look.palette.accent
+val Muted: Color get() = Look.palette.muted
+val OnAccent: Color get() = Look.palette.onAccent
+private val Hairline: Color get() = Look.palette.hairline
+
+/** Faint wash over a panel (white on dark looks, black on light ones). */
+private fun wash(alpha: Float): Color = Look.palette.tint.copy(alpha = alpha)
+
+/** The soft shine across the top of a glass panel (nothing in the other looks). */
+private fun Modifier.sheen(): Modifier = Look.sheen()?.let { this.background(it) } ?: this
+
+private val panelShadow get() = if (Look.palette.glass) 0.dp else 8.dp
 
 @Composable
 fun BubbleContent(faded: Boolean) {
@@ -100,7 +112,7 @@ fun BubbleContent(faded: Boolean) {
             .padding(2.dp)
             .graphicsLayer { this.alpha = alpha }
             .clip(CircleShape)
-            .background(Ink.copy(alpha = 0.94f))
+            .background(Look.panel(0.94f))
             .border(2.dp, Vermilion, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
@@ -120,12 +132,12 @@ fun MenuContent(
 ) {
     Surface(
         shape = RoundedCornerShape(22.dp),
-        color = Ink.copy(alpha = 0.97f),
-        border = BorderStroke(1.dp, Hairline),
-        shadowElevation = 8.dp,
+        color = Look.panel(0.97f),
+        border = Look.edge(),
+        shadowElevation = panelShadow,
         modifier = Modifier.padding(6.dp),
     ) {
-        Column(Modifier.width(IntrinsicSize.Max).padding(vertical = 6.dp)) {
+        Column(Modifier.width(IntrinsicSize.Max).sheen().padding(vertical = 6.dp)) {
             MenuRow(R.drawable.ic_lines, "Read screen", onRead)
             MenuRow(R.drawable.ic_book, "Read in reading view", onView)
             MenuRow(R.drawable.ic_sparkle, "Read simplified", onSimple)
@@ -205,15 +217,15 @@ fun PlayerBar(
     val last = remember { FloatArray(2) }
     Surface(
         shape = RoundedCornerShape(26.dp),
-        color = Ink.copy(alpha = 0.96f),
-        border = BorderStroke(1.dp, Hairline),
-        shadowElevation = 10.dp,
+        color = Look.panel(0.96f),
+        border = Look.edge(),
+        shadowElevation = panelShadow,
         modifier = Modifier
             .padding(horizontal = 10.dp, vertical = 6.dp)
             .widthIn(max = 560.dp)
             .fillMaxWidth(),
     ) {
-        Column(Modifier.padding(start = 16.dp, end = 8.dp, bottom = 10.dp)) {
+        Column(Modifier.sheen().padding(start = 16.dp, end = 8.dp, bottom = 10.dp)) {
             // Drag handle (move the bar up or down): shrink to a dot on the left, hide on the right.
             Row(Modifier.fillMaxWidth().height(30.dp), verticalAlignment = Alignment.CenterVertically) {
                 actions.onDot?.let { shrink ->
@@ -238,7 +250,7 @@ fun PlayerBar(
                         Modifier
                             .size(width = 36.dp, height = 4.dp)
                             .clip(RoundedCornerShape(2.dp))
-                            .background(Color(0x40FFFFFF))
+                            .background(wash(0.25f))
                     )
                 }
                 actions.onHide?.let { hide ->
@@ -257,7 +269,7 @@ fun PlayerBar(
                 LinearProgressIndicator(
                     progress = { (state.index.toFloat() / state.total).coerceIn(0f, 1f) },
                     color = Vermilion,
-                    trackColor = Color(0x22FFFFFF),
+                    trackColor = wash(0.13f),
                     modifier = Modifier
                         .padding(end = 8.dp)
                         .fillMaxWidth()
@@ -349,13 +361,13 @@ fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
     val last = remember { FloatArray(2) }
     Surface(
         shape = RoundedCornerShape(30.dp),
-        color = Ink.copy(alpha = 0.9f),
-        border = BorderStroke(1.dp, Hairline),
-        shadowElevation = 8.dp,
+        color = Look.panel(0.9f),
+        border = Look.edge(),
+        shadowElevation = panelShadow,
         modifier = Modifier
             .padding(6.dp),
     ) {
-        Row(Modifier.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.sheen().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
                     .size(width = 22.dp, height = 48.dp)
@@ -376,8 +388,8 @@ fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
                 if (state.total > 0) {
                     CircularProgressIndicator(
                         progress = { (state.index.toFloat() / state.total).coerceIn(0f, 1f) },
-                        color = Paper,
-                        trackColor = Color(0x33FFFFFF),
+                        color = OnAccent,
+                        trackColor = OnAccent.copy(alpha = 0.2f),
                         strokeWidth = 2.dp,
                         modifier = Modifier.size(44.dp),
                     )
@@ -385,7 +397,7 @@ fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
                 Icon(
                     painterResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play),
                     if (playing) "Pause" else "Play",
-                    tint = Paper,
+                    tint = OnAccent,
                     modifier = Modifier.size(24.dp),
                 )
             }
@@ -411,7 +423,7 @@ private fun TextPanel(state: ReaderState, progress: Progress) {
             .fillMaxWidth()
             .heightIn(max = 220.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(Color(0x12FFFFFF))
+            .background(wash(0.07f))
             .padding(horizontal = 12.dp, vertical = 4.dp),
     ) {
         itemsIndexed(state.blocks) { i, b ->
@@ -456,11 +468,11 @@ private fun Pill(label: String, accent: Boolean = false, onClick: () -> Unit) {
     Box(
         Modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(if (accent) Vermilion else Color(0x1AFFFFFF))
+            .background(if (accent) Vermilion else wash(0.10f))
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 5.dp),
     ) {
-        Text(label, color = Paper, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(label, color = if (accent) OnAccent else Paper, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -511,7 +523,7 @@ private fun PlayButton(status: Status, onClick: () -> Unit) {
     ) {
         if (waiting) {
             CircularProgressIndicator(
-                color = Paper,
+                color = OnAccent,
                 strokeWidth = 2.dp,
                 modifier = Modifier.size(50.dp),
             )
@@ -592,11 +604,11 @@ private fun SpeedRow(speed: Float, onSpeed: (Float) -> Unit) {
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(12.dp))
-                        .background(if (selected) Vermilion else Color(0x14FFFFFF))
+                        .background(if (selected) Vermilion else wash(0.08f))
                         .clickable { onSpeed(p) }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 ) {
-                    Text(speedLabel(p), color = Paper, fontSize = 12.sp)
+                    Text(speedLabel(p), color = if (selected) OnAccent else Paper, fontSize = 12.sp)
                 }
             }
             Spacer(Modifier.width(2.dp))
@@ -637,9 +649,9 @@ fun TapCatcher(onTap: (Int, Int) -> Unit, onCancel: () -> Unit) {
     ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = Ink.copy(alpha = 0.96f),
-            border = BorderStroke(1.dp, Hairline),
-            shadowElevation = 8.dp,
+            color = Look.panel(0.96f),
+            border = Look.edge(),
+            shadowElevation = panelShadow,
             modifier = Modifier.padding(top = 56.dp, start = 16.dp, end = 16.dp),
         ) {
             Row(
@@ -717,8 +729,8 @@ fun HighlightLayer(sentence: List<RectF>, word: List<RectF>, outline: Rect?, out
 
 
 /**
- * The player shrunk down to a small dot. It breathes while reading, shows two little pause bars
- * when paused, spins while getting ready, and a thin ring shows how far along it is.
+ * The player shrunk down to a small dot. Quiet on purpose: a small dot with a thin ring for how
+ * far along it is, a very slow, faint glow while reading, two tiny bars when paused.
  * Tap it for the controls, hold it to pause or carry on, drag it anywhere.
  */
 @Composable
@@ -732,48 +744,47 @@ fun PlayerDot(
     val playing = state.status == Status.Playing
     val busy = state.status == Status.Buffering || state.status == Status.Preparing
     val motion = rememberInfiniteTransition(label = "dot")
-    val breath by motion.animateFloat(
-        0f, 1f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "breath",
-    )
-    val spin by motion.animateFloat(
-        0f, 360f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart), label = "spin",
+    val glow by motion.animateFloat(
+        0f, 1f, infiniteRepeatable(tween(2600, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "glow",
     )
     val gesture = remember { DotGesture() }
     val view = LocalView.current
     val progress = if (state.total > 0) (state.index.toFloat() / state.total).coerceIn(0f, 1f) else 0f
+    val accent = Vermilion
+    val onAccent = OnAccent
+    val p = Look.palette
+    val backing = Look.panel(0.75f, p)
+    val ringTrack = p.tint.copy(alpha = 0.18f)
+    val ringFill = p.text.copy(alpha = 0.85f)
     Box(
         Modifier
-            .size(56.dp)
+            .size(40.dp)
             .pointerInteropFilter { e -> gesture.handle(e, view, onTap, onHold, onDrag, onDragEnd) },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.fillMaxSize()) {
+        Canvas(Modifier.size(28.dp)) {
             val c = center
-            val core = 10.dp.toPx()
-            val ringR = core + 4.dp.toPx()
-            if (playing) {
-                // A soft ring that grows and fades, like breathing, while it reads.
-                val r = ringR + (size.minDimension / 2f - ringR) * breath
-                drawCircle(Vermilion.copy(alpha = 0.5f * (1f - breath)), r, c)
-            }
-            // A dark backing so the dot stands out on any page.
-            drawCircle(Color(0x99141211), ringR + 2.dp.toPx(), c)
-            drawCircle(Color(0x33FFFFFF), ringR, c, style = Stroke(1.5f.dp.toPx()))
-            val arcTopLeft = Offset(c.x - ringR, c.y - ringR)
-            val arcSize = Size(ringR * 2, ringR * 2)
+            val core = 6.5f.dp.toPx()
+            val ringR = 11.dp.toPx()
+            // A barely-there glow, only while reading.
+            if (playing) drawCircle(accent.copy(alpha = 0.10f + 0.12f * glow), ringR + 2.5f.dp.toPx(), c)
+            drawCircle(backing, ringR + 1.dp.toPx(), c)
+            drawCircle(ringTrack, ringR, c, style = Stroke(1.2f.dp.toPx()))
+            val arc = Size(ringR * 2, ringR * 2)
+            val at = Offset(c.x - ringR, c.y - ringR)
             if (busy) {
-                drawArc(Paper, spin, 100f, false, arcTopLeft, arcSize, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+                // Getting ready: the ring fills in softly instead of spinning.
+                drawCircle(ringFill.copy(alpha = 0.25f + 0.35f * glow), ringR, c, style = Stroke(1.2f.dp.toPx()))
             } else if (progress > 0f) {
-                drawArc(Paper, -90f, 360f * progress, false, arcTopLeft, arcSize, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+                drawArc(ringFill, -90f, 360f * progress, false, at, arc, style = Stroke(1.6f.dp.toPx(), cap = StrokeCap.Round))
             }
-            drawCircle(Vermilion, core, c)
+            drawCircle(accent, core, c)
             if (!playing && !busy) {
-                // Paused: two little bars.
-                val w = 2.5f.dp.toPx()
-                val h = 8.dp.toPx()
-                val gap = 1.8f.dp.toPx()
-                drawRoundRect(Paper, Offset(c.x - gap - w, c.y - h / 2), Size(w, h), CornerRadius(w / 2))
-                drawRoundRect(Paper, Offset(c.x + gap, c.y - h / 2), Size(w, h), CornerRadius(w / 2))
+                val w = 1.6f.dp.toPx()
+                val h = 5.dp.toPx()
+                val gap = 1.2f.dp.toPx()
+                drawRoundRect(onAccent, Offset(c.x - gap - w, c.y - h / 2), Size(w, h), CornerRadius(w / 2))
+                drawRoundRect(onAccent, Offset(c.x + gap, c.y - h / 2), Size(w, h), CornerRadius(w / 2))
             }
         }
     }

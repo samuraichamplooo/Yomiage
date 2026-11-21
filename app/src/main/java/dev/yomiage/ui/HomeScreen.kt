@@ -88,6 +88,8 @@ import dev.yomiage.data.BubbleMode
 import dev.yomiage.data.HighlightMode
 import dev.yomiage.data.PlayerVisibility
 import dev.yomiage.data.Prefs
+import dev.yomiage.theme.Look
+import dev.yomiage.theme.ThemeKind
 import dev.yomiage.data.Settings as YSettings
 import dev.yomiage.data.Voice
 import dev.yomiage.data.Voices
@@ -164,7 +166,7 @@ fun HomeScreen(pendingText: MutableState<String?>) {
                     maxLines = 10,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Seal,
-                        unfocusedBorderColor = Color(0xFF3A3530),
+                        unfocusedBorderColor = Line,
                         cursorColor = Seal,
                     ),
                     modifier = Modifier.fillMaxWidth(),
@@ -174,7 +176,7 @@ fun HomeScreen(pendingText: MutableState<String?>) {
                     Button(
                         onClick = { Reader.read(TextChunker.paragraphs(text)) },
                         enabled = modelReady && text.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Seal, contentColor = PaperWhite),
+                        colors = ButtonDefaults.buttonColors(containerColor = Seal, contentColor = OnSeal),
                     ) {
                         Icon(painterResource(R.drawable.ic_play), null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
@@ -211,6 +213,7 @@ fun HomeScreen(pendingText: MutableState<String?>) {
         }
 
         StartSection(context, settings)
+        LookSection(settings)
         PlayerSection(context, settings)
         SimpleSection(context, settings)
         VoiceSection(settings, modelReady)
@@ -239,7 +242,7 @@ private fun Header() {
                 .background(Seal),
             contentAlignment = Alignment.Center,
         ) {
-            Text("読", color = PaperWhite, fontSize = 22.sp, fontWeight = FontWeight.Medium)
+            Text("読", color = OnSeal, fontSize = 22.sp, fontWeight = FontWeight.Medium)
         }
         Spacer(Modifier.width(14.dp))
         Column {
@@ -262,14 +265,21 @@ private fun SectionLabel(text: String) {
 
 @Composable
 private fun Group(content: @Composable ColumnScope.() -> Unit) {
-    Surface(shape = RoundedCornerShape(24.dp), color = Card, modifier = Modifier.fillMaxWidth()) {
-        Column(content = content)
+    val p = Look.palette
+    val sheen = Look.sheen(p)
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = Card,
+        border = if (p.glass) Look.edge(p) else null,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(if (sheen != null) Modifier.background(sheen) else Modifier, content = content)
     }
 }
 
 @Composable
 private fun Divider() {
-    HorizontalDivider(thickness = 1.dp, color = InkBlack)
+    HorizontalDivider(thickness = 1.dp, color = if (Look.palette.glass) Look.palette.outline else Look.palette.background)
 }
 
 // -------------------------------------------------------------------- setup
@@ -296,7 +306,7 @@ private fun SetupCard(context: Context, model: ModelStatus, running: Boolean, ba
                 }
                 is ModelStatus.Unpacking -> ProgressLine(model.fraction, "Unpacking… ${(model.fraction * 100).toInt()}%")
                 is ModelStatus.Failed -> {
-                    Text(model.message, color = Color(0xFFFFB4A6), fontSize = 13.sp)
+                    Text(model.message, color = Bad, fontSize = 13.sp)
                     Spacer(Modifier.height(8.dp))
                     StepButton("Try again") { ModelManager.start(context) }
                 }
@@ -352,7 +362,7 @@ private fun SetupStep(number: Int, title: String, done: Boolean, body: String, a
             contentAlignment = Alignment.Center,
         ) {
             if (done) {
-                Icon(painterResource(R.drawable.ic_check), null, tint = PaperWhite, modifier = Modifier.size(16.dp))
+                Icon(painterResource(R.drawable.ic_check), null, tint = OnSeal, modifier = Modifier.size(16.dp))
             } else {
                 Text("$number", color = PaperWhite, fontSize = 13.sp)
             }
@@ -397,7 +407,7 @@ private fun StepButton(label: String, outlined: Boolean = false, onClick: () -> 
     } else {
         Button(
             onClick = onClick,
-            colors = ButtonDefaults.buttonColors(containerColor = Seal, contentColor = PaperWhite),
+            colors = ButtonDefaults.buttonColors(containerColor = Seal, contentColor = OnSeal),
         ) { Text(label) }
     }
 }
@@ -420,7 +430,7 @@ private fun HowToCard() {
 private fun Tip(symbol: String, text: String) {
     Row(verticalAlignment = Alignment.Top) {
         Text(symbol, color = Seal, fontSize = 15.sp, modifier = Modifier.width(26.dp))
-        Text(text, color = Color(0xFFD9D1C8), fontSize = 14.sp, lineHeight = 19.sp)
+        Text(text, color = SoftText, fontSize = 14.sp, lineHeight = 19.sp)
     }
 }
 
@@ -626,7 +636,7 @@ private fun KeyField(value: String, hint: String, onChange: (String) -> Unit) {
         },
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = Seal,
-            unfocusedBorderColor = Color(0xFF3A3530),
+            unfocusedBorderColor = Line,
             cursorColor = Seal,
         ),
         modifier = Modifier.fillMaxWidth(),
@@ -654,7 +664,7 @@ private fun SimpleSection(context: Context, settings: YSettings) {
                 "Breaks hard passages down into plain language. Tap ✦ in the player to hear the paragraph you're on " +
                     "explained, and then it goes back to the page. Or long-press the bubble and choose Read simplified to hear " +
                     "the whole page rewritten simply.",
-                color = Color(0xFFD9D1C8), fontSize = 13.sp, lineHeight = 18.sp,
+                color = SoftText, fontSize = 13.sp, lineHeight = 18.sp,
             )
             Spacer(Modifier.height(8.dp))
             Text(
@@ -694,7 +704,7 @@ private fun SimpleSection(context: Context, settings: YSettings) {
                         checkedTrackColor = Seal,
                         uncheckedThumbColor = Faint,
                         uncheckedTrackColor = CardHigh,
-                        uncheckedBorderColor = Color(0xFF3A3530),
+                        uncheckedBorderColor = Line,
                     ),
                 )
             }
@@ -769,7 +779,7 @@ private fun SimpleSection(context: Context, settings: YSettings) {
                 for (line in lines) {
                     Text(
                         line,
-                        color = if ("✓" in line) Color(0xFFB9E4B0) else if ("✗" in line) Color(0xFFFFB4A6) else Faint,
+                        color = if ("✓" in line) Good else if ("✗" in line) Bad else Faint,
                         fontSize = 13.sp, lineHeight = 18.sp,
                         modifier = Modifier.padding(vertical = 2.dp),
                     )
@@ -785,7 +795,7 @@ private fun SimpleSection(context: Context, settings: YSettings) {
                 placeholder = { Text("e.g. a nursing student, a beginner", color = Faint) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Seal,
-                    unfocusedBorderColor = Color(0xFF3A3530),
+                    unfocusedBorderColor = Line,
                     cursorColor = Seal,
                 ),
                 modifier = Modifier.fillMaxWidth(),
@@ -803,6 +813,95 @@ private fun SimpleSection(context: Context, settings: YSettings) {
             "The bubble, tiles and Read My Screen read the plain-language version instead of the original.",
             settings.alwaysSimple,
         ) { on -> Prefs.update { it.copy(alwaysSimple = on) } }
+    }
+}
+
+@Composable
+private fun LookSection(settings: YSettings) {
+    SectionLabel("Look")
+    Group {
+        Column(Modifier.padding(16.dp)) {
+            Text("Theme", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "For the app, the reading view and the floating player. Material You takes its colors from your " +
+                    "wallpaper. Liquid glass is see-through and frosted, with your wallpaper blurred behind the app. " +
+                    "Both follow your phone's light or dark mode.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                ThemeTile("Classic", ThemeKind.CLASSIC, settings.theme, Modifier.weight(1f))
+                ThemeTile("Material You", ThemeKind.MATERIAL_YOU, settings.theme, Modifier.weight(1f))
+                ThemeTile("Liquid glass", ThemeKind.GLASS, settings.theme, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** A little preview of a look: its background, a card and the accent dot. */
+@Composable
+private fun ThemeTile(name: String, kind: Int, current: Int, modifier: Modifier) {
+    val selected = kind == current
+    val dynamic = android.os.Build.VERSION.SDK_INT >= 31
+    val context = LocalContext.current
+    val cs = remember(kind) {
+        if (dynamic) androidx.compose.material3.dynamicDarkColorScheme(context) else null
+    }
+    val (bg, card, accent) = when (kind) {
+        ThemeKind.MATERIAL_YOU -> Triple(
+            cs?.surface ?: Color(0xFF1B1B1F), cs?.surfaceContainerHighest ?: Color(0xFF34343A), cs?.primary ?: Color(0xFFADC6FF),
+        )
+        ThemeKind.GLASS -> Triple(Color(0xFF26324A), Color(0x40FFFFFF), cs?.primary ?: Color(0xFF64A8FF))
+        else -> Triple(Color(0xFF0E0D0C), Color(0xFF221F1C), Color(0xFFD8462B))
+    }
+    Column(
+        modifier
+            .clip(RoundedCornerShape(16.dp))
+            .border(2.dp, if (selected) Seal else Line, RoundedCornerShape(16.dp))
+            .clickable { Prefs.update { it.copy(theme = kind) } }
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(
+                    if (kind == ThemeKind.GLASS) {
+                        androidx.compose.ui.graphics.Brush.linearGradient(
+                            listOf(Color(0xFF3B5BA5), Color(0xFF8E5AA8), Color(0xFFE08A6B)),
+                        )
+                    } else {
+                        androidx.compose.ui.graphics.SolidColor(bg)
+                    }
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(
+                Modifier
+                    .padding(horizontal = 10.dp)
+                    .fillMaxWidth()
+                    .height(26.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(card)
+                    .then(
+                        if (kind == ThemeKind.GLASS) Modifier.border(1.dp, Color(0x99FFFFFF), RoundedCornerShape(13.dp))
+                        else Modifier
+                    )
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(14.dp).clip(CircleShape).background(accent))
+                Spacer(Modifier.width(6.dp))
+                Box(Modifier.weight(1f).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color(0x66FFFFFF)))
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            name, color = if (selected) PaperWhite else Faint, fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal, maxLines = 1,
+        )
     }
 }
 
@@ -934,7 +1033,7 @@ private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        Text(label, color = PaperWhite, fontSize = 13.sp)
+        Text(label, color = if (selected) OnSeal else PaperWhite, fontSize = 13.sp)
     }
 }
 
@@ -951,7 +1050,7 @@ private fun VoiceRow(v: Voice, selected: Boolean, modelReady: Boolean) {
             Modifier
                 .size(20.dp)
                 .clip(CircleShape)
-                .border(2.dp, if (selected) Seal else Color(0xFF4A443E), CircleShape),
+                .border(2.dp, if (selected) Seal else Line, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             if (selected) Box(Modifier.size(10.dp).clip(CircleShape).background(Seal))
@@ -986,7 +1085,7 @@ private fun VoiceRow(v: Voice, selected: Boolean, modelReady: Boolean) {
         ) {
             Icon(
                 painterResource(R.drawable.ic_play), "Preview ${v.name}",
-                tint = if (modelReady) PaperWhite else Color(0xFF4A443E),
+                tint = if (modelReady) PaperWhite else Line,
                 modifier = Modifier.size(20.dp),
             )
         }
@@ -1110,7 +1209,7 @@ private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChang
                 checkedTrackColor = Seal,
                 uncheckedThumbColor = Faint,
                 uncheckedTrackColor = CardHigh,
-                uncheckedBorderColor = Color(0xFF3A3530),
+                uncheckedBorderColor = Line,
             ),
         )
     }
@@ -1146,7 +1245,7 @@ private fun AdvancedSection(context: Context, settings: YSettings, modelReady: B
                     .padding(16.dp),
             ) {
                 Column {
-                    Text("Delete voice pack", color = Color(0xFFFFB4A6), fontSize = 15.sp)
+                    Text("Delete voice pack", color = Bad, fontSize = 15.sp)
                     Text("Frees about 350 MB. You can download it again any time.", color = Faint, fontSize = 12.sp)
                 }
             }
