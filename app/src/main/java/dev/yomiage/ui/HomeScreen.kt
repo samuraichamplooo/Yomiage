@@ -640,7 +640,12 @@ private fun SimpleSection(context: Context, settings: YSettings) {
     var results by remember { mutableStateOf<List<String>?>(null) }
     val nano by OnDevice.state.collectAsState()
     val nanoDownload by OnDevice.download.collectAsState()
+    val nanoBusy by OnDevice.busy.collectAsState()
     LaunchedEffect(Unit) { OnDevice.refresh() }
+    // While it's downloading, keep checking so this flips to Ready by itself.
+    LaunchedEffect(nano, nanoBusy) {
+        if (nano == NanoState.DOWNLOADING || nanoBusy) OnDevice.watchWhileDownloading()
+    }
 
     SectionLabel("Simple explanations")
     Group {
@@ -667,9 +672,15 @@ private fun SimpleSection(context: Context, settings: YSettings) {
                     Text(
                         when (nano) {
                             NanoState.AVAILABLE -> "Ready. Free, private, works offline, no key needed."
-                            NanoState.DOWNLOADABLE -> "Needs a one-time download from Google."
-                            NanoState.DOWNLOADING -> "Downloading…"
-                            NanoState.UNAVAILABLE -> "Not available on this phone right now."
+                            NanoState.DOWNLOADABLE ->
+                                if (nanoBusy) "Downloading. It keeps going if you leave this screen."
+                                else "Needs a one-time download from Google (large, so use Wi-Fi)."
+                            NanoState.DOWNLOADING ->
+                                "Google's AICore app is downloading it in the background. This turns to Ready by itself " +
+                                    "when it's done, even if you leave."
+                            NanoState.UNAVAILABLE ->
+                                if (!OnDevice.aiCoreInstalled()) "Needs Google's Android AICore app, which isn't on this phone."
+                                else "Not available on this phone right now. Updating Android AICore or restarting the phone can help."
                             NanoState.UNKNOWN -> "Checking…"
                         },
                         color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
@@ -687,12 +698,20 @@ private fun SimpleSection(context: Context, settings: YSettings) {
                     ),
                 )
             }
-            if (nano == NanoState.DOWNLOADABLE || nano == NanoState.DOWNLOADING || nanoDownload != null) {
+            if (nano != NanoState.AVAILABLE && nano != NanoState.UNKNOWN) {
+                nanoDownload?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = PaperWhite, fontSize = 12.sp, lineHeight = 16.sp)
+                }
                 Spacer(Modifier.height(8.dp))
-                nanoDownload?.let { Text(it, color = Faint, fontSize = 12.sp) }
-                if (nano == NanoState.DOWNLOADABLE) {
-                    Spacer(Modifier.height(6.dp))
-                    StepButton("Download on-device AI") { scope.launch { OnDevice.setUp() } }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    when {
+                        nano == NanoState.DOWNLOADABLE && !nanoBusy ->
+                            StepButton("Download on-device AI") { OnDevice.startDownload() }
+                        nanoBusy || nano == NanoState.DOWNLOADING ->
+                            StepButton("Try again", outlined = true) { OnDevice.startDownload(restart = true) }
+                    }
+                    StepButton("Update Android AICore", outlined = true) { OnDevice.openAiCoreInStore(context) }
                 }
             }
             Spacer(Modifier.height(6.dp))

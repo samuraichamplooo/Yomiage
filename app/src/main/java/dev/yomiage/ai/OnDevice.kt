@@ -3,7 +3,9 @@ package dev.yomiage.ai
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.WindowManager
 import com.google.mlkit.genai.common.DownloadStatus
@@ -12,12 +14,20 @@ import com.google.mlkit.genai.prompt.Generation
 import com.google.mlkit.genai.prompt.GenerativeModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.Locale
 
 enum class NanoState { UNKNOWN, AVAILABLE, DOWNLOADABLE, DOWNLOADING, UNAVAILABLE }
 
@@ -28,6 +38,7 @@ enum class NanoState { UNKNOWN, AVAILABLE, DOWNLOADABLE, DOWNLOADING, UNAVAILABL
  */
 object OnDevice {
     private const val TAG = "OnDevice"
+    private const val AICORE = "com.google.android.aicore"
     private lateinit var app: Context
     private var model: GenerativeModel? = null
 
@@ -35,7 +46,16 @@ object OnDevice {
     val state: StateFlow<NanoState> = _state
 
     private val _download = MutableStateFlow<String?>(null)
+    /** What the download is doing, in words (null when there's nothing to say). */
     val download: StateFlow<String?> = _download
+
+    private val _busy = MutableStateFlow(false)
+    /** True while Yomiage is running the download (it keeps going if you leave the screen). */
+    val busy: StateFlow<Boolean> = _busy
+
+    // Lives as long as the app, so leaving the screen or folding the phone doesn't stop the download.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var downloadJob: Job? = null
 
     fun init(context: Context) {
         app = context.applicationContext
@@ -61,32 +81,138 @@ object OnDevice {
             NanoState.UNAVAILABLE
         }
         _state.value = s
+        if (s == NanoState.AVAILABLE && !_busy.value) _download.value = null
         return s
     }
 
-    /** Downloads Gemini Nano (once). Progress goes to [download]. */
-    suspend fun setUp() {
-        if (refresh() == NanoState.AVAILABLE) return
+    /** Whether Google's Android AICore app (which downloads and runs Gemini Nano) is on the phone. */
+    fun aiCoreInstalled(): Boolean = try {
+        app.packageManager.getPackageInfo(AICORE, 0)
+        true
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Opens Android AICore in the Play Store, to update it. */
+    fun openAiCoreInStore(context: Context) {
+        val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$AICORE"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
-            _download.value = "Starting download…"
-            client().download().collect { st ->
-                when (st) {
-                    is DownloadStatus.DownloadStarted -> _download.value = "Downloading…"
-                    is DownloadStatus.DownloadProgress ->
-                        _download.value = "Downloading… ${st.totalBytesDownloaded / 1_048_576} MB"
-                    is DownloadStatus.DownloadCompleted -> _download.value = null
-                    is DownloadStatus.DownloadFailed -> _download.value = "Download failed. Try again on Wi-Fi."
-                    else -> {}
+            context.startActivity(market)
+        } catch (e: Exception) {
+            try {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$AICORE"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Starts (or restarts) the one-time Gemini Nano download. It runs in the background and checks
+     * on itself, so it finishes even if you leave the screen. Progress goes to [download].
+     */
+    fun startDownload(restart: Boolean = false) {
+        val old = downloadJob
+        if (old?.isActive == true && !restart) return
+        _busy.value = true
+        downloadJob = scope.launch {
+            old?.cancelAndJoin()
+            val me = coroutineContext[Job]
+            try {
+                runDownload()
+            } finally {
+                if (downloadJob === me) _busy.value = false
+            }
+        }
+    }
+
+    private suspend fun runDownload() {
+        if (refresh() == NanoState.AVAILABLE) return
+        _download.value = "Asking Google's AICore app to start the download…"
+        var total = 0L
+        var lastEvent = SystemClock.elapsedRealtime()
+        var finished = false
+        coroutineScope {
+            val dl = launch {
+                try {
+                    client().download().collect { st ->
+                        lastEvent = SystemClock.elapsedRealtime()
+                        when (st) {
+                            is DownloadStatus.DownloadStarted -> {
+                                total = st.bytesToDownload
+                                _download.value = if (total > 0) "Downloading… 0 of ${mb(total)}" else "Downloading…"
+                            }
+                            is DownloadStatus.DownloadProgress -> {
+                                val got = st.totalBytesDownloaded
+                                _download.value = if (total > 0) {
+                                    "Downloading… ${mb(got)} of ${mb(total)} (${(got * 100 / total).coerceIn(0, 100)}%)"
+                                } else {
+                                    "Downloading… ${mb(got)}"
+                                }
+                            }
+                            is DownloadStatus.DownloadCompleted -> {
+                                finished = true
+                                _download.value = "Finishing up…"
+                            }
+                            is DownloadStatus.DownloadFailed -> {
+                                finished = true
+                                _download.value = "Download failed: ${st.e.message ?: "unknown error"}"
+                            }
+                            else -> {}
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.w(TAG, "download failed", e)
+                    finished = true
+                    _download.value = "Download failed: ${e.message ?: e.javaClass.simpleName}"
                 }
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            Log.w(TAG, "download failed", e)
-            _download.value = "Download failed: ${e.message ?: e.javaClass.simpleName}"
+            // Checks on the download now and then: AICore sometimes finishes (or stalls) without saying so.
+            val watch = launch {
+                while (true) {
+                    delay(15_000)
+                    if (refresh() == NanoState.AVAILABLE) {
+                        finished = true
+                        dl.cancel()
+                        return@launch
+                    }
+                    if (SystemClock.elapsedRealtime() - lastEvent > 90_000) {
+                        _download.value = "Still waiting on Google's AICore app. Keep Wi-Fi on and the phone " +
+                            "plugged in, make sure Android AICore is up to date, then tap Try again."
+                    }
+                }
+            }
+            dl.join()
+            watch.cancel()
         }
-        refresh()
+        // The download "completing" isn't proof: check the model is really there.
+        when (refresh()) {
+            NanoState.AVAILABLE -> _download.value = null
+            NanoState.DOWNLOADING -> _download.value =
+                "Google's AICore app is still setting it up in the background. This updates when it's ready."
+            else -> if (_download.value?.startsWith("Download failed") != true) {
+                _download.value = "The download didn't finish. Tap Try again."
+            }
+        }
     }
+
+    /** Re-checks every so often while AICore downloads on its own, so the screen flips to Ready. */
+    suspend fun watchWhileDownloading() {
+        while (true) {
+            val s = refresh()
+            if (s != NanoState.DOWNLOADING && !(s == NanoState.DOWNLOADABLE && _busy.value)) return
+            delay(10_000)
+        }
+    }
+
+    private fun mb(bytes: Long): String =
+        if (bytes >= 1_073_741_824) String.format(Locale.US, "%.1f GB", bytes / 1_073_741_824.0)
+        else "${bytes / 1_048_576} MB"
 
     suspend fun stream(prompt: String, cancelled: () -> Boolean, onText: (String) -> Unit) {
         var s = _state.value
