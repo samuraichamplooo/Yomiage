@@ -148,7 +148,10 @@ class FollowAlong(
         chars?.forEach { r -> if (r != null && r.width() > 0f && r.height() > 0f) where.union(r) }
         if (where.isEmpty && fallback != null && !fallback.isEmpty) where.set(fallback)
         val node = firstNode(block, c)
-        if (where.isEmpty && node != null) {
+        // Only web pages: in ordinary apps, list rows get reused while scrolling, so following
+        // along by scrolling would end up pointing at the wrong text.
+        if (node == null || ScreenScanner.role(node) == null) return
+        if (where.isEmpty) {
             val r = Rect()
             ScreenScanner.boundsOf(node, r)
             where.set(r)

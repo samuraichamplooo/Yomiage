@@ -98,7 +98,8 @@ class ReaderService : AccessibilityService() {
             scope,
             screen = { ScreenScanner.screenBounds(this) },
             mayScroll = {
-                Prefs.current.followScroll && Reader.state.value.status == Status.Playing &&
+                Prefs.current.followScroll &&
+                    (Reader.state.value.status == Status.Playing || Reader.state.value.status == Status.Buffering) &&
                     screenPkg != null && activeAppPackage() == screenPkg
             },
         )

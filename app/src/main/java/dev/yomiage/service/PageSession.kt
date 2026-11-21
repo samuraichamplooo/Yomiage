@@ -55,6 +55,7 @@ class PageSession(
     private val screens = ArrayList<ScreenBlock>()   // one per Reader block, same order
     private val seen = HashSet<AccessibilityNodeInfo>()
     private val seenText = HashSet<String>()
+    private val seenPlain = HashSet<String>()
     private val holds = ArrayList<Hold>()
     private var finished = false
     private var loading = false
@@ -179,6 +180,7 @@ class PageSession(
             b.node?.let { seen.add(it) }
             for (p in b.parts) p.node?.let { seen.add(it) }
             textKey(b)?.let { seenText.add(it) }
+            seenPlain.add(plainKey(b))
         }
     }
 
@@ -255,11 +257,18 @@ class PageSession(
 
     /** What the latest scan found that isn't being read yet, in page order. */
     private fun newBlocks(found: List<ScreenBlock>): List<ScreenBlock> {
-        fun known(b: ScreenBlock) = (b.node != null && b.node in seen) || b.parts.any { it.node != null && it.node in seen }
+        // Web page nodes stay the same while the page scrolls, so they identify text already read.
+        // Ordinary apps reuse list rows for new text, so there it's the text itself that counts.
+        fun web(b: ScreenBlock) = (b.node ?: b.parts.firstOrNull()?.node)?.let { ScreenScanner.role(it) != null } == true
+        fun known(b: ScreenBlock): Boolean =
+            if (web(b)) (b.node != null && b.node in seen) || b.parts.any { it.node != null && it.node in seen }
+            else plainKey(b) in seenPlain
         val lastKnown = found.indexOfLast { known(it) }
         val after = if (lastKnown >= 0) found.subList(lastKnown + 1, found.size) else found
         return after.filter { !known(it) && (textKey(it) == null || textKey(it) !in seenText) }
     }
+
+    private fun plainKey(b: ScreenBlock) = b.text.lowercase().replace(Regex("\\s+"), " ").trim()
 
     private fun add(fresh: List<ScreenBlock>) {
         val explain = Prefs.current.explainVisuals && Ai.canTry()
@@ -324,7 +333,10 @@ class PageSession(
                     Log.w(TAG, "couldn't explain block ${next.block}", e)
                     null
                 }
-                Reader.resolveHold(id, next.block, text)
+                // No explanation: at least say what the page calls the picture, if it says.
+                val alt = next.screen.text.trim()
+                val fallback = if (next.screen.kind == BlockKind.FIGURE && usefulAlt(alt)) "Picture: $alt" else null
+                Reader.resolveHold(id, next.block, text ?: fallback)
             }
         }
     }
@@ -373,8 +385,9 @@ class PageSession(
                 if (bmp != null) return toPicture(bmp)
             }
         }
-        // Wait (a little) for reading to bring the figure on screen, then capture it.
-        repeat(20) {
+        // Wait for reading to bring the figure on screen (it scrolls along), then capture it.
+        repeat(120) {
+            if (Reader.state.value.session != id) return null
             val r = Rect()
             if (node != null) {
                 try {
@@ -387,7 +400,9 @@ class PageSession(
             }
             val sc = ScreenScanner.screenBounds(service)
             val visible = Rect(r)
-            if (visible.intersect(sc) && visible.height() >= r.height() * 0.8f && (pkg == null || service.frontPackage() == pkg)) {
+            val onScreen = !r.isEmpty && visible.intersect(sc)
+            val enough = onScreen && (visible.height() >= r.height() * 0.8f || visible.height() >= sc.height() * 0.6f)
+            if (enough && (pkg == null || service.frontPackage() == pkg)) {
                 val shot = service.captureScreen() ?: return null
                 val crop = Rect(visible)
                 if (!crop.intersect(0, 0, shot.width, shot.height) || crop.width() < 40 || crop.height() < 40) return null
