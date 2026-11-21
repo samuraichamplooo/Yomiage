@@ -36,6 +36,8 @@ class FollowAlong(
     private val screen: () -> Rect,
     /** Whether scrolling along is allowed right now (setting on, the page is in front, playing). */
     private val mayScroll: () -> Boolean,
+    /** Whether the screen is on: with it off there's nothing to highlight, so it rests (saves battery). */
+    private val awake: () -> Boolean = { true },
 ) {
     private companion object {
         const val TAG = "FollowAlong"
@@ -111,6 +113,10 @@ class FollowAlong(
     }
 
     private fun measureLater(delayMs: Long) {
+        if (!awake()) {
+            moved = true   // measure afresh when the screen comes back on
+            return
+        }
         val c = chunk ?: return
         val idx = chunkIndex
         val s = session

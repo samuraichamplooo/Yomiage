@@ -89,6 +89,18 @@ class ReaderService : AccessibilityService() {
     }
 
     override fun onServiceConnected() {
+        if (!screenOnRegistered) {
+            try {
+                val filter = android.content.IntentFilter(Intent.ACTION_SCREEN_ON)
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    registerReceiver(screenOn, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    registerReceiver(screenOn, filter)
+                }
+                screenOnRegistered = true
+            } catch (_: Exception) {
+            }
+        }
         super.onServiceConnected()
         instance = this
         _running.value = true
@@ -97,8 +109,9 @@ class ReaderService : AccessibilityService() {
         val f = FollowAlong(
             scope,
             screen = { ScreenScanner.screenBounds(this) },
+            awake = { power.isInteractive },
             mayScroll = {
-                Prefs.current.followScroll &&
+                power.isInteractive && Prefs.current.followScroll &&
                     (Reader.state.value.status == Status.Playing || Reader.state.value.status == Status.Buffering) &&
                     screenPkg != null && activeAppPackage() == screenPkg
             },
@@ -168,7 +181,24 @@ class ReaderService : AccessibilityService() {
         super.onDestroy()
     }
 
+    private val power by lazy { getSystemService(android.os.PowerManager::class.java) }
+
+    // Screen back on: catch the highlight up with where reading got to.
+    private val screenOn = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            follow?.onScreenMoved()
+        }
+    }
+    private var screenOnRegistered = false
+
     private fun shutdown() {
+        if (screenOnRegistered) {
+            try {
+                unregisterReceiver(screenOn)
+            } catch (_: Exception) {
+            }
+            screenOnRegistered = false
+        }
         if (instance == null && overlay == null) return
         try {
             accessibilityButtonController.unregisterAccessibilityButtonCallback(buttonCallback)

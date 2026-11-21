@@ -290,6 +290,50 @@ object Reader {
         requestFocus()
     }
 
+    /**
+     * Where reading is and how long all of it is, in milliseconds at normal speed. Parts that
+     * haven't been voiced yet are estimated from how long the voiced parts took per letter.
+     */
+    fun timeline(): Pair<Long, Long>? {
+        val s = session ?: return null
+        return s.withLock {
+            if (s.n == 0) return@withLock null
+            val perChar = s.framesPerCharLocked()
+            val heard = s.heardChunk.coerceIn(0, s.n)
+            var pos = 0.0
+            var total = 0.0
+            for (i in 0 until s.n) {
+                val len = s.estFramesLocked(i, perChar)
+                if (i < heard) pos += len
+                total += len
+            }
+            if (heard < s.n) pos += s.heardOff
+            (pos * 1000 / SR).toLong() to (total * 1000 / SR).toLong()
+        }
+    }
+
+    /** Jumps to about [ms] into the text (scrubbing the lock screen player), to the start of a sentence. */
+    fun seekToMs(ms: Long) {
+        val s = session ?: return
+        s.withLock {
+            if (s.n == 0) return@withLock
+            val perChar = s.framesPerCharLocked()
+            val target = ms.coerceAtLeast(0) * SR / 1000.0
+            var at = 0.0
+            var idx = s.n - 1
+            for (i in 0 until s.n) {
+                val len = s.estFramesLocked(i, perChar)
+                if (at + len > target) {
+                    idx = i
+                    break
+                }
+                at += len
+            }
+            s.seekAbsChunk = idx
+            if (s.finished) s.paused = false
+        }
+    }
+
     /** Jump by [seconds] of speech (negative = back). */
     fun seekBy(seconds: Float) {
         val s = session ?: return
@@ -488,6 +532,29 @@ object Reader {
             } finally {
                 lock.unlock()
             }
+        }
+
+        /** Audio frames per letter so far (about 14 letters a second before anything's been voiced). */
+        fun framesPerCharLocked(): Double {
+            var frames = 0L
+            var chars = 0L
+            for (i in 0 until n) {
+                val l = lengths[i]
+                if (l > 0 && !chunks[i].hold) {
+                    frames += l
+                    chars += chunks[i].text.length
+                }
+            }
+            return if (chars >= 150) frames.toDouble() / chars else SR / 14.0
+        }
+
+        /** How long chunk [i] is (or will be), in frames. */
+        fun estFramesLocked(i: Int, perChar: Double): Double {
+            val l = lengths[i]
+            if (l >= 0) return l.toDouble()
+            val c = chunks[i]
+            if (c.hold) return 0.0
+            return c.text.length * perChar + c.gapMs * SR / 1000.0
         }
 
         /**

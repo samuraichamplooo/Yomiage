@@ -77,6 +77,22 @@ class PageSession(
         id = Reader.read(texts, startBlock = first, startChar = startChar, fromScreen = true, open = more)
         collectHolds(texts, scr, 0)
         watch()
+        if (more) {
+            // Gather the rest of the page soon, while it's still on screen: then reading carries on
+            // even if the phone gets locked (a locked phone's browser can't be read).
+            scope.launch {
+                delay(1_500)
+                if (Reader.state.value.session == id && (pkg == null || service.frontPackage() == pkg)) {
+                    try {
+                        loadNow()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "early gather failed", e)
+                    }
+                }
+            }
+        }
         return id
     }
 

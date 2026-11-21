@@ -858,10 +858,13 @@ private fun PlayerSection(context: Context, settings: YSettings) {
         }
         Divider()
         Column(Modifier.padding(16.dp)) {
-            Text("Quick panel controls", color = PaperWhite, fontSize = 15.sp)
+            Text("Quick panel, lock screen and Always On Display", color = PaperWhite, fontSize = 15.sp)
             Text(
                 if (notificationsOk) {
-                    "On. While reading, swipe down for play/pause, skip 5 seconds (next/previous) and skip 2 seconds."
+                    "On. While reading, a minimal black player shows in the quick panel and in Samsung's Now bar on the " +
+                        "lock screen and Always On Display: play/pause, skip 5 seconds, and drag the bar to move through " +
+                        "the text. It only updates when something changes, to save battery. If it doesn't show on the lock " +
+                        "screen, turn on Settings > Lock screen and AOD > Now bar, and allow Yomiage there."
                 } else {
                     "Allow notifications so the reading controls show in your quick panel and on the lock screen."
                 },
