@@ -1,7 +1,10 @@
 package dev.yomiage.overlay
 
 import android.graphics.Rect
+import android.graphics.RectF
 import android.view.MotionEvent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -41,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -50,11 +54,16 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.yomiage.R
+import dev.yomiage.reader.Progress
 import dev.yomiage.reader.ReaderState
 import dev.yomiage.reader.Status
 import java.util.Locale
@@ -66,11 +75,13 @@ val Muted = Color(0xFF9A928A)
 private val Hairline = Color(0x26FFFFFF)
 
 @Composable
-fun BubbleContent() {
+fun BubbleContent(faded: Boolean) {
+    val alpha by animateFloatAsState(if (faded) 0.45f else 1f, tween(400), label = "bubble")
     Box(
         Modifier
             .size(52.dp)
             .padding(2.dp)
+            .graphicsLayer { this.alpha = alpha }
             .clip(CircleShape)
             .background(Ink.copy(alpha = 0.94f))
             .border(2.dp, Vermilion, CircleShape),
@@ -81,7 +92,7 @@ fun BubbleContent() {
 }
 
 @Composable
-fun MenuContent(onRead: () -> Unit, onTap: () -> Unit, onScan: () -> Unit, onOpen: () -> Unit) {
+fun MenuContent(onRead: () -> Unit, onTap: () -> Unit, onScan: () -> Unit, onHide: () -> Unit, onOpen: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(22.dp),
         color = Ink.copy(alpha = 0.97f),
@@ -94,6 +105,7 @@ fun MenuContent(onRead: () -> Unit, onTap: () -> Unit, onScan: () -> Unit, onOpe
             MenuRow(R.drawable.ic_tap, "Tap to start", onTap)
             MenuRow(R.drawable.ic_scan, "Scan text in images", onScan)
             HorizontalDivider(color = Hairline, modifier = Modifier.padding(vertical = 4.dp))
+            MenuRow(R.drawable.ic_hide, "Hide bubble", onHide)
             MenuRow(R.drawable.ic_settings, "Yomiage settings", onOpen)
         }
     }
@@ -118,6 +130,7 @@ private fun MenuRow(icon: Int, label: String, onClick: () -> Unit) {
 @Composable
 fun PlayerBar(
     state: ReaderState,
+    progress: Progress,
     onPlayPause: () -> Unit,
     onSeek: (Float) -> Unit,
     onSpeed: (Float) -> Unit,
@@ -179,9 +192,9 @@ fun PlayerBar(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val caption = when {
-                    state.status == Status.Error -> state.message ?: "Something went wrong."
-                    state.status == Status.Finished -> "Done. Press play to hear it again."
-                    else -> state.caption
+                    state.status == Status.Error -> AnnotatedString(state.message ?: "Something went wrong.")
+                    state.status == Status.Finished -> AnnotatedString("Done. Press play to hear it again.")
+                    else -> karaoke(state, progress)
                 }
                 Text(
                     caption,
@@ -289,6 +302,32 @@ private fun PlayButton(status: Status, onClick: () -> Unit) {
             tint = Paper,
             modifier = Modifier.size(28.dp),
         )
+    }
+}
+
+/** The sentence with the word being spoken marked, trimmed so that word stays in view. */
+private fun karaoke(state: ReaderState, progress: Progress): AnnotatedString {
+    val chunk = state.chunk
+    if (chunk == null || progress.session != state.session || progress.chunkIndex != state.chunkIndex ||
+        progress.wordStart < 0 || progress.wordEnd > chunk.text.length
+    ) {
+        return AnnotatedString(chunk?.text ?: state.caption)
+    }
+    val t = chunk.text
+    val ws = progress.wordStart
+    val we = progress.wordEnd
+    var from = 0
+    if (ws > 70) {
+        val sp = t.lastIndexOf(' ', ws - 45)
+        from = if (sp < 0) 0 else sp + 1
+    }
+    return buildAnnotatedString {
+        if (from > 0) append("… ")
+        append(t.substring(from, ws))
+        withStyle(SpanStyle(background = Vermilion.copy(alpha = 0.6f), fontWeight = FontWeight.Medium)) {
+            append(t.substring(ws, we))
+        }
+        withStyle(SpanStyle(color = Paper.copy(alpha = 0.6f))) { append(t.substring(we)) }
     }
 }
 
@@ -406,24 +445,45 @@ fun TapCatcher(onTap: (Int, Int) -> Unit, onCancel: () -> Unit) {
     }
 }
 
-/** Outlines the paragraph being read. */
+/** Marks the sentence being read (a soft wash), the word being spoken (stronger), or a paragraph outline. */
 @Composable
-fun HighlightLayer(bounds: Rect?) {
+fun HighlightLayer(sentence: List<RectF>, word: List<RectF>, outline: Rect?) {
     val view = LocalView.current
     Canvas(Modifier.fillMaxSize()) {
-        val b = bounds ?: return@Canvas
+        if (sentence.isEmpty() && word.isEmpty() && outline == null) return@Canvas
         val loc = IntArray(2)
         view.getLocationOnScreen(loc)
-        val pad = 6.dp.toPx()
-        val left = b.left - loc[0] - pad
-        val top = b.top - loc[1] - pad
-        val w = b.width() + pad * 2
-        val h = b.height() + pad * 2
-        val radius = CornerRadius(10.dp.toPx())
-        drawRoundRect(Vermilion.copy(alpha = 0.10f), Offset(left, top), Size(w, h), radius)
-        drawRoundRect(
-            Vermilion.copy(alpha = 0.8f), Offset(left, top), Size(w, h), radius,
-            style = Stroke(width = 2.dp.toPx()),
-        )
+        val ox = loc[0].toFloat()
+        val oy = loc[1].toFloat()
+        val pad = 2.dp.toPx()
+        val radius = CornerRadius(4.dp.toPx())
+        for (r in sentence) {
+            drawRoundRect(
+                Vermilion.copy(alpha = 0.16f),
+                Offset(r.left - ox - pad, r.top - oy - pad),
+                Size(r.width() + pad * 2, r.height() + pad * 2),
+                radius,
+            )
+        }
+        for (r in word) {
+            drawRoundRect(
+                Vermilion.copy(alpha = 0.42f),
+                Offset(r.left - ox - pad, r.top - oy - pad),
+                Size(r.width() + pad * 2, r.height() + pad * 2),
+                radius,
+            )
+            drawRect(
+                Vermilion,
+                Offset(r.left - ox - pad, r.bottom - oy + pad),
+                Size(r.width() + pad * 2, 2.dp.toPx()),
+            )
+        }
+        if (outline != null) {
+            val p = 6.dp.toPx()
+            val tl = Offset(outline.left - ox - p, outline.top - oy - p)
+            val sz = Size(outline.width() + p * 2, outline.height() + p * 2)
+            drawRoundRect(Vermilion.copy(alpha = 0.10f), tl, sz, CornerRadius(10.dp.toPx()))
+            drawRoundRect(Vermilion.copy(alpha = 0.8f), tl, sz, CornerRadius(10.dp.toPx()), style = Stroke(width = 2.dp.toPx()))
+        }
     }
 }

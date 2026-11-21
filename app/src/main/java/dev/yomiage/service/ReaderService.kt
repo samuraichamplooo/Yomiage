@@ -5,8 +5,11 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Point
+import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
 import dev.yomiage.MainActivity
 import dev.yomiage.data.Prefs
 import dev.yomiage.data.Voices
@@ -40,12 +43,24 @@ class ReaderService : AccessibilityService() {
             private set
         private val _running = MutableStateFlow(false)
         val running: StateFlow<Boolean> = _running
+
+        /** Windows that cover the app while a voice assistant or the shade is closing. */
+        private val transient = setOf(
+            "com.android.systemui",
+            "com.google.android.apps.bard",
+            "com.google.android.googlequicksearchbox",
+            "com.samsung.android.bixby.agent",
+        )
     }
 
     private var scope: CoroutineScope = MainScope()
     private var overlay: Overlay? = null
+    private var follow: FollowAlong? = null
     private var scanJob: Job? = null
     private var finishedJob: Job? = null
+    private var foregroundJob: Job? = null
+    private val foreground = MutableStateFlow<String?>(null)
+
     private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
         override fun onClicked(controller: AccessibilityButtonController) {
             if (Reader.state.value.status == Status.Idle) readScreen(ocr = false) else Reader.togglePlay()
@@ -58,36 +73,48 @@ class ReaderService : AccessibilityService() {
         _running.value = true
         scope.cancel()
         scope = MainScope()
-        val o = Overlay(this)
+        val f = FollowAlong(scope)
+        follow = f
+        val o = Overlay(this, f)
         overlay = o
         try {
             accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
         } catch (e: Exception) {
             Log.w(TAG, "accessibility button unavailable", e)
         }
+        foreground.value = activeAppPackage()
         scope.launch {
-            combine(Reader.state, Prefs.settings) { st, settings -> st to settings }.collect { (st, settings) ->
-                o.update(st, settings)
-                // Tidy up a finished session after a while.
-                finishedJob?.cancel()
-                if (st.status == Status.Finished || st.status == Status.Error) {
-                    val session = st.session
-                    finishedJob = launch {
-                        delay(if (st.status == Status.Error) 12_000 else 30_000)
-                        val now = Reader.state.value
-                        if (now.session == session && (now.status == Status.Finished || now.status == Status.Error)) Reader.stop()
+            combine(Reader.state, Prefs.settings, foreground) { st, settings, pkg -> Triple(st, settings, pkg) }
+                .collect { (st, settings, pkg) ->
+                    o.update(st, settings, pkg)
+                    f.onState(st)
+                    // Tidy up a finished session after a while.
+                    finishedJob?.cancel()
+                    if (st.status == Status.Finished || st.status == Status.Error) {
+                        val session = st.session
+                        finishedJob = launch {
+                            delay(if (st.status == Status.Error) 12_000 else 30_000)
+                            val now = Reader.state.value
+                            if (now.session == session && (now.status == Status.Finished || now.status == Status.Error)) {
+                                Reader.stop()
+                            }
+                        }
                     }
                 }
-            }
         }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val e = event ?: return
-        if (e.packageName?.toString() == packageName) return
         when (e.eventType) {
-            AccessibilityEvent.TYPE_VIEW_SCROLLED,
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> if (Reader.state.value.fromScreen) overlay?.invalidateHighlight()
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                trackForeground()
+                if (e.packageName?.toString() != packageName && Reader.state.value.fromScreen) follow?.onScreenMoved()
+            }
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                if (e.packageName?.toString() != packageName && Reader.state.value.fromScreen) follow?.onScreenMoved()
+            }
         }
     }
 
@@ -119,9 +146,46 @@ class ReaderService : AccessibilityService() {
         scope.cancel()
         overlay?.destroy()
         overlay = null
+        follow = null
         instance = null
         _running.value = false
         Reader.stop()
+    }
+
+    // ---------------------------------------------------------------- which app is on screen
+
+    private fun trackForeground() {
+        foregroundJob?.cancel()
+        foregroundJob = scope.launch {
+            delay(250)
+            foreground.value = activeAppPackage()
+        }
+    }
+
+    private fun activeAppPackage(): String? = try {
+        val apps = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+        val w = apps.firstOrNull { it.isActive } ?: apps.firstOrNull { it.isFocused }
+        (w?.root ?: rootInActiveWindow)?.packageName?.toString()
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun homePackage(): String? = try {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        packageManager.resolveActivity(intent, 0)?.activityInfo?.packageName
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Waits for a voice assistant, the notification shade or our own launcher stub to get out of the way. */
+    private suspend fun waitForApp(): String? {
+        val until = SystemClock.uptimeMillis() + 3000
+        var pkg = activeAppPackage()
+        while (SystemClock.uptimeMillis() < until && (pkg == null || pkg in transient || pkg == packageName)) {
+            delay(200)
+            pkg = activeAppPackage()
+        }
+        return pkg
     }
 
     // ---------------------------------------------------------------- actions
@@ -134,6 +198,31 @@ class ReaderService : AccessibilityService() {
         startActivity(
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+    }
+
+    /**
+     * Reads the app that's on screen once something covering it goes away: used by the
+     * "Read My Screen" launcher entry (voice assistant, side button) and the Quick Settings tiles.
+     */
+    fun readWhenBack(tapMode: Boolean, closeShade: Boolean) {
+        if (!ModelManager.isReady(this)) {
+            Reader.showMessage("Download the Kokoro voices in Yomiage first.")
+            return
+        }
+        warmUp()
+        if (closeShade && Build.VERSION.SDK_INT >= 31) {
+            performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+        }
+        scanJob?.cancel()
+        scanJob = scope.launch {
+            delay(if (closeShade) 450 else 350)
+            val pkg = waitForApp()
+            if (pkg != null && pkg == homePackage()) {
+                Reader.showMessage("Open the page or app you want read first, then ask again.")
+                return@launch
+            }
+            if (tapMode) startTapMode() else readScreen(ocr = false)
+        }
     }
 
     /** Reads everything on screen from the top. With [ocr], reads the pixels instead of the app's text. */
@@ -161,7 +250,8 @@ class ReaderService : AccessibilityService() {
                 Reader.showMessage("I couldn't find any text on this screen.")
                 return@launch
             }
-            Reader.read(blocks.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
+            val id = Reader.read(blocks.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
+            follow?.attach(id, blocks)
         }
     }
 
@@ -192,10 +282,11 @@ class ReaderService : AccessibilityService() {
                 Reader.showMessage("I couldn't find text there. Try tapping right on the words.")
                 return@launch
             }
-            Reader.read(
+            val id = Reader.read(
                 blocks.map { TextBlock(it.text, it.bounds) },
                 startBlock = block, startChar = offset, fromScreen = true,
             )
+            follow?.attach(id, blocks)
         }
     }
 

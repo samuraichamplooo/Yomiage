@@ -12,22 +12,28 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
+import dev.yomiage.data.BubbleMode
+import dev.yomiage.data.Browsers
+import dev.yomiage.data.HighlightMode
 import dev.yomiage.data.Prefs
 import dev.yomiage.data.Settings
 import dev.yomiage.reader.Reader
 import dev.yomiage.reader.ReaderState
 import dev.yomiage.reader.Status
+import dev.yomiage.service.FollowAlong
 import dev.yomiage.service.ReaderService
 import dev.yomiage.service.ScreenScanner
+import dev.yomiage.service.lineRects
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.math.hypot
 
 /** Owns the floating windows: bubble, its menu, the player bar, tap mode and the highlight. */
-class Overlay(private val service: ReaderService) {
+class Overlay(private val service: ReaderService, private val follow: FollowAlong) {
     private val wm = service.getSystemService(WindowManager::class.java)
     private val main = Handler(Looper.getMainLooper())
 
@@ -39,10 +45,11 @@ class Overlay(private val service: ReaderService) {
     private var tap: Win? = null
     private var highlight: Win? = null
     private var menuClosedAt = 0L
+    private var lastPackage: String? = null
 
-    /** Becomes false when the page scrolls, so a stale outline isn't drawn. */
-    val highlightValid = MutableStateFlow(true)
-    private var lastSession = -1L
+    /** The bubble fades back when it hasn't been touched for a few seconds. */
+    private val bubbleFaded = MutableStateFlow(false)
+    private val fade = Runnable { bubbleFaded.value = true }
 
     private fun dp(v: Int): Int = (v * service.resources.displayMetrics.density).toInt()
 
@@ -83,28 +90,28 @@ class Overlay(private val service: ReaderService) {
 
     // ---------------------------------------------------------------- state
 
-    /** Shows the bubble when idle and the player while reading. */
-    fun update(state: ReaderState, settings: Settings) {
-        if (state.session != lastSession) {
-            lastSession = state.session
-            highlightValid.value = true
-        }
+    /** Shows the player while reading; otherwise the bubble, depending on its setting and the app on screen. */
+    fun update(state: ReaderState, settings: Settings, foreground: String?) {
+        lastPackage = foreground
         if (state.status != Status.Idle) {
             closeMenu()
             hideBubble()
             showBar()
         } else {
             hideBar()
-            if (settings.showBubble && tap == null) showBubble() else hideBubble()
+            val wanted = when (settings.bubbleMode) {
+                BubbleMode.ALWAYS -> true
+                BubbleMode.BROWSERS -> Browsers.isBrowser(foreground) || menu != null
+                else -> false
+            }
+            if (wanted && tap == null) showBubble() else if (menu == null) hideBubble()
         }
     }
 
-    fun invalidateHighlight() {
-        highlightValid.value = false
-    }
+    private fun refresh() = update(Reader.state.value, Prefs.current, lastPackage)
 
     fun onConfigurationChanged() {
-        highlightValid.value = false
+        follow.onScreenMoved()
         bubble?.let {
             placeBubble(it.params)
             relayout(it)
@@ -118,6 +125,7 @@ class Overlay(private val service: ReaderService) {
 
     fun destroy() {
         main.removeCallbacks(tapTimeout)
+        main.removeCallbacks(fade)
         for (w in listOf(tap, menu, bar, highlight, bubble)) remove(w)
         tap = null
         menu = null
@@ -139,14 +147,24 @@ class Overlay(private val service: ReaderService) {
         val size = dp(56)
         val p = params(size, size, LayoutParams.FLAG_LAYOUT_NO_LIMITS)
         placeBubble(p)
-        val w = add(p) { BubbleContent() }
+        val w = add(p) {
+            val faded by bubbleFaded.collectAsState()
+            BubbleContent(faded)
+        }
         w.view.setOnTouchListener(BubbleTouch(w))
         bubble = w
+        wake()
     }
 
     private fun hideBubble() {
         remove(bubble)
         bubble = null
+    }
+
+    private fun wake() {
+        bubbleFaded.value = false
+        main.removeCallbacks(fade)
+        main.postDelayed(fade, 3500)
     }
 
     private fun placeBubble(p: LayoutParams) {
@@ -156,6 +174,7 @@ class Overlay(private val service: ReaderService) {
         p.y = (st.bubbleY * s.height()).toInt().coerceIn(dp(48), (s.height() - p.height - dp(48)).coerceAtLeast(dp(48)))
     }
 
+    /** Tap: read the screen. Long-press: menu. Drag: move it to either edge. */
     private inner class BubbleTouch(private val w: Win) : View.OnTouchListener {
         private val slop = ViewConfiguration.get(service).scaledTouchSlop
         private var downX = 0f
@@ -166,7 +185,7 @@ class Overlay(private val service: ReaderService) {
         private var longPressed = false
         private val longPress = Runnable {
             longPressed = true
-            service.startTapMode()
+            showMenu()
         }
 
         @SuppressLint("ClickableViewAccessibility")
@@ -179,7 +198,8 @@ class Overlay(private val service: ReaderService) {
                     startY = w.params.y
                     dragging = false
                     longPressed = false
-                    main.postDelayed(longPress, 450)
+                    wake()
+                    main.postDelayed(longPress, 420)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - downX
@@ -205,9 +225,13 @@ class Overlay(private val service: ReaderService) {
                         placeBubble(w.params)
                         relayout(w)
                     } else if (!longPressed) {
-                        // Tapping the bubble while the menu is open closes it (the tap counts as "outside").
-                        if (SystemClock.uptimeMillis() - menuClosedAt > 500) toggleMenu()
+                        if (menu != null || SystemClock.uptimeMillis() - menuClosedAt < 500) {
+                            closeMenu()
+                        } else {
+                            service.readScreen(ocr = false)
+                        }
                     }
+                    wake()
                 }
                 MotionEvent.ACTION_CANCEL -> main.removeCallbacks(longPress)
             }
@@ -217,23 +241,25 @@ class Overlay(private val service: ReaderService) {
 
     // ---------------------------------------------------------------- menu
 
-    private fun toggleMenu() {
-        if (menu != null) closeMenu() else showMenu()
-    }
-
     private fun showMenu() {
+        if (menu != null) return
         val b = bubble ?: return
         val right = Prefs.current.bubbleRight
         val s = ScreenScanner.screenBounds(service)
         val p = params(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)
         p.gravity = Gravity.TOP or (if (right) Gravity.END else Gravity.START)
         p.x = b.params.width + dp(8)
-        p.y = (b.params.y - dp(60)).coerceIn(dp(40), (s.height() - dp(300)).coerceAtLeast(dp(40)))
+        p.y = (b.params.y - dp(60)).coerceIn(dp(40), (s.height() - dp(340)).coerceAtLeast(dp(40)))
         val w = add(p) {
             MenuContent(
                 onRead = { service.readScreen(ocr = false) },
                 onTap = { service.startTapMode() },
                 onScan = { service.readScreen(ocr = true) },
+                onHide = {
+                    closeMenu()
+                    Prefs.update { it.copy(bubbleMode = BubbleMode.OFF) }
+                    Toast.makeText(service, "Bubble hidden. You can turn it back on in Yomiage.", Toast.LENGTH_LONG).show()
+                },
                 onOpen = {
                     closeMenu()
                     service.openApp()
@@ -254,8 +280,10 @@ class Overlay(private val service: ReaderService) {
     }
 
     fun closeMenu() {
+        if (menu == null) return
         remove(menu)
         menu = null
+        wake()
     }
 
     // ---------------------------------------------------------------- player bar
@@ -266,14 +294,7 @@ class Overlay(private val service: ReaderService) {
                 LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT,
                 LayoutParams.FLAG_NOT_TOUCHABLE or LayoutParams.FLAG_LAYOUT_IN_SCREEN or LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             )
-            highlight = add(hp) {
-                val st by Reader.state.collectAsState()
-                val settings by Prefs.settings.collectAsState()
-                val valid by highlightValid.collectAsState()
-                val show = settings.highlight && valid && st.fromScreen &&
-                    (st.status == Status.Playing || st.status == Status.Paused || st.status == Status.Buffering)
-                HighlightLayer(if (show) st.bounds?.let { visiblePart(it) } else null)
-            }
+            highlight = add(hp) { FollowAlongLayer() }
         }
         if (bar != null) return
         val p = params(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, 0)
@@ -283,8 +304,10 @@ class Overlay(private val service: ReaderService) {
         w.owner.attachTo(w.view)
         w.view.setContent {
             val st by Reader.state.collectAsState()
+            val progress by Reader.progress.collectAsState()
             PlayerBar(
                 state = st,
+                progress = progress,
                 onPlayPause = { Reader.togglePlay() },
                 onSeek = { Reader.seekBy(it) },
                 onSpeed = { Reader.setSpeed(it) },
@@ -307,6 +330,37 @@ class Overlay(private val service: ReaderService) {
         }
         wm.addView(w.view, p)
         bar = w
+    }
+
+    /** Highlights the sentence and the word being read, or outlines the paragraph. */
+    @Composable
+    private fun FollowAlongLayer() {
+        val st by Reader.state.collectAsState()
+        val settings by Prefs.settings.collectAsState()
+        val geo by follow.geometry.collectAsState()
+        val progress by Reader.progress.collectAsState()
+        val speaking = st.status == Status.Playing || st.status == Status.Paused || st.status == Status.Buffering
+        val g = geo
+        if (settings.highlightMode == HighlightMode.OFF || !st.fromScreen || !speaking || g == null ||
+            g.session != st.session || g.chunkIndex != st.chunkIndex
+        ) {
+            HighlightLayer(emptyList(), emptyList(), null)
+            return
+        }
+        val chars = g.chars
+        if (chars == null) {
+            HighlightLayer(emptyList(), emptyList(), g.fallback?.let { visiblePart(it) })
+            return
+        }
+        val sentence = lineRects(chars, 0, chars.size)
+        val word = if (settings.highlightMode == HighlightMode.WORD &&
+            progress.session == st.session && progress.chunkIndex == st.chunkIndex && progress.wordStart >= 0
+        ) {
+            lineRects(chars, progress.wordStart, progress.wordEnd)
+        } else {
+            emptyList()
+        }
+        HighlightLayer(sentence, word, null)
     }
 
     private fun clampBar(p: LayoutParams) {
@@ -357,6 +411,6 @@ class Overlay(private val service: ReaderService) {
         if (tap == null) return
         remove(tap)
         tap = null
-        if (restore) update(Reader.state.value, Prefs.current)
+        if (restore) refresh()
     }
 }

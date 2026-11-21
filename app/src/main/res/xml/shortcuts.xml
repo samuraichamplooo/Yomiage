@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_read_screen"
+        android:shortcutId="read_screen"
+        android:shortcutLongLabel="@string/shortcut_read"
+        android:shortcutShortLabel="@string/shortcut_read">
+        <intent
+            android:action="dev.yomiage.READ_SCREEN"
+            android:targetClass="dev.yomiage.ReadScreenActivity"
+            android:targetPackage="dev.yomiage" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_tap_screen"
+        android:shortcutId="tap_to_read"
+        android:shortcutLongLabel="@string/shortcut_tap"
+        android:shortcutShortLabel="@string/shortcut_tap">
+        <intent
+            android:action="dev.yomiage.TAP_TO_READ"
+            android:targetClass="dev.yomiage.ReadScreenActivity"
+            android:targetPackage="dev.yomiage" />
+    </shortcut>
+</shortcuts>

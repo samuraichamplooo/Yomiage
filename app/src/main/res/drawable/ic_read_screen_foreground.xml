@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- A page with lines and a play mark -->
+    <path
+        android:strokeColor="#FFF3EDE4"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:pathData="M36,40H72M36,49H72M36,58H56" />
+    <path
+        android:fillColor="#FFF3EDE4"
+        android:pathData="M61,58.5L61,73.5L73.5,66z" />
+</vector>

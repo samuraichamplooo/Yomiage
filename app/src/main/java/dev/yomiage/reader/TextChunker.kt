@@ -7,8 +7,14 @@ import java.util.Locale
 /** A piece of text from the screen (a paragraph, a label, a line of a list) and where it is. */
 data class TextBlock(val text: String, val bounds: Rect? = null)
 
-/** One unit of speech: usually a sentence. [gapMs] is the pause added after it. */
-data class Chunk(val text: String, val block: Int, val gapMs: Int)
+/**
+ * One unit of speech: usually a sentence. [gapMs] is the pause added after it.
+ * [map] gives, for each character of [text], its index in the block's original text, so the
+ * sentence and the word being spoken can be found on screen.
+ */
+class Chunk(val text: String, val block: Int, val gapMs: Int, val map: IntArray) {
+    fun withGap(gap: Int) = Chunk(text, block, gap, map)
+}
 
 object TextChunker {
     private const val GAP_SPLIT = 40
@@ -16,12 +22,6 @@ object TextChunker {
     private const val GAP_BLOCK = 300
 
     private val urlRe = Regex("""(https?://|www\.)\S+""", RegexOption.IGNORE_CASE)
-    private val emojiRe = Regex(
-        "[\\x{1F000}-\\x{1FAFF}\\x{2600}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}" +
-            "\\x{200D}\\x{20E3}\\x{E0020}-\\x{E007F}]"
-    )
-    private val wsRe = Regex("\\s+")
-    private val spaceBeforePunct = Regex("\\s+([.,;:!?])")
     private val abbreviations = setOf(
         "mr.", "mrs.", "ms.", "dr.", "prof.", "st.", "jr.", "sr.", "vs.", "etc.", "inc.", "ltd.",
         "co.", "corp.", "no.", "fig.", "approx.", "dept.", "est.", "gen.", "gov.", "lt.", "mt.", "sgt.",
@@ -29,23 +29,70 @@ object TextChunker {
     )
     private val initialsRe = Regex("^(?:[A-Za-z]\\.)+$")
 
+    /** Splits pasted or selected text into paragraphs. */
+    fun paragraphs(text: String): List<TextBlock> =
+        text.split(Regex("\\n\\s*\\n|\\n")).map { it.trim() }.filter { it.isNotEmpty() }.map { TextBlock(it) }
+
+    private fun isEmoji(cp: Int) =
+        cp in 0x1F000..0x1FAFF || cp in 0x2600..0x27BF || cp in 0x2B00..0x2BFF ||
+            cp in 0xFE00..0xFE0F || cp == 0x200D || cp == 0x20E3 || cp in 0xE0020..0xE007F
+
+    private class Mapped(val text: String, val map: IntArray)
+
+    /**
+     * Cleans text for speech (links read as "link", emoji dropped, spaces collapsed) while keeping
+     * track of where each spoken character came from.
+     */
+    private fun normalize(raw: String, readUrls: Boolean): Mapped {
+        val sb = StringBuilder(raw.length)
+        val map = IntArray(raw.length + 8)
+        var len = 0
+        fun emit(c: Char, at: Int) {
+            sb.append(c)
+            map[len++] = at
+        }
+        fun dropLast() {
+            sb.setLength(sb.length - 1)
+            len--
+        }
+        val urls = if (readUrls) emptyList() else urlRe.findAll(raw).map { it.range }.toList()
+        var ui = 0
+        var lastSpace = true
+        var i = 0
+        while (i < raw.length) {
+            if (ui < urls.size && i == urls[ui].first) {
+                if (!lastSpace) emit(' ', i)
+                for (ch in "link") emit(ch, i)
+                lastSpace = false
+                i = urls[ui].last + 1
+                ui++
+                continue
+            }
+            val cp = raw.codePointAt(i)
+            val n = Character.charCount(cp)
+            if (Character.isWhitespace(cp) || cp == 0xA0 || cp == 0x200B || isEmoji(cp)) {
+                if (!lastSpace) {
+                    emit(' ', i)
+                    lastSpace = true
+                }
+                i += n
+                continue
+            }
+            val c = raw[i]
+            if (n == 1 && c in ".,;:!?" && len > 0 && sb[sb.length - 1] == ' ') dropLast()
+            for (k in 0 until n) emit(raw[i + k], i + k)
+            lastSpace = false
+            i += n
+        }
+        if (len > 0 && sb[sb.length - 1] == ' ') dropLast()
+        return Mapped(sb.toString(), map.copyOf(len))
+    }
+
     /** True if a "sentence" really ends at an abbreviation like "Dr." or "U.S." and should continue. */
     private fun endsWithAbbreviation(sentence: String): Boolean {
         val last = sentence.trimEnd().substringAfterLast(' ').trimStart('(', '"', '“')
         if (last.isEmpty() || !last.endsWith(".")) return false
         return last.lowercase() in abbreviations || initialsRe.matches(last)
-    }
-
-    /** Splits pasted or selected text into paragraphs. */
-    fun paragraphs(text: String): List<TextBlock> =
-        text.split(Regex("\\n\\s*\\n|\\n")).map { it.trim() }.filter { it.isNotEmpty() }.map { TextBlock(it) }
-
-    fun normalize(s: String, readUrls: Boolean): String {
-        var t = s.replace(' ', ' ').replace("​", "")
-        if (!readUrls) t = urlRe.replace(t, " link ")
-        t = emojiRe.replace(t, " ")
-        t = wsRe.replace(t, " ")
-        return spaceBeforePunct.replace(t, "$1").trim()
     }
 
     /** Index of the start of the sentence that contains [index]. */
@@ -71,48 +118,73 @@ object TextChunker {
         val out = ArrayList<Chunk>()
         val bi = BreakIterator.getSentenceInstance(Locale.getDefault())
         for (b in startBlock.coerceAtLeast(0) until blocks.size) {
-            var raw = blocks[b].text
-            if (b == startBlock && startChar > 0 && startChar < raw.length) {
-                raw = raw.substring(sentenceStart(raw, startChar))
+            val full = normalize(blocks[b].text, readUrls)
+            var text = full.text
+            var map = full.map
+            if (b == startBlock && startChar > 0) {
+                var ns = map.indexOfFirst { it >= startChar }
+                if (ns < 0) ns = text.length
+                val s = sentenceStart(text, ns)
+                text = text.substring(s)
+                map = map.copyOfRange(s, map.size)
             }
-            val text = normalize(raw, readUrls)
             if (!speakable(text)) continue
 
-            val sentences = ArrayList<String>()
+            // Sentence ranges, merging splits after abbreviations.
+            val ranges = ArrayList<IntArray>()
             bi.setText(text)
             var start = bi.first()
             var end = bi.next()
             while (end != BreakIterator.DONE) {
-                val s = text.substring(start, end).trim()
-                if (s.isNotEmpty()) {
-                    if (sentences.isNotEmpty() && endsWithAbbreviation(sentences.last())) {
-                        sentences[sentences.size - 1] = sentences.last() + " " + s
+                val r = trim(text, start, end)
+                if (r != null) {
+                    val prev = ranges.lastOrNull()
+                    if (prev != null && endsWithAbbreviation(text.substring(prev[0], prev[1]))) {
+                        prev[1] = r[1]
                     } else {
-                        sentences.add(s)
+                        ranges.add(r)
                     }
                 }
                 start = end
                 end = bi.next()
             }
-            if (sentences.isEmpty()) sentences.add(text)
 
-            for ((si, sentence) in sentences.withIndex()) {
-                val lastInBlock = si == sentences.size - 1
-                var rest = sentence
-                while (rest.length > maxLen(out.size)) {
-                    val cut = findCut(rest, maxLen(out.size))
-                    val piece = rest.substring(0, cut).trim()
-                    if (piece.isNotEmpty() && speakable(piece)) out.add(Chunk(piece, b, GAP_SPLIT))
-                    rest = rest.substring(cut).trim()
+            for ((ri, range) in ranges.withIndex()) {
+                val lastInBlock = ri == ranges.size - 1
+                var s = range[0]
+                val e = range[1]
+                while (e - s > maxLen(out.size)) {
+                    val cut = s + findCut(text.substring(s, e), maxLen(out.size))
+                    val p = trim(text, s, cut)
+                    if (p != null && speakable(text.substring(p[0], p[1]))) {
+                        out.add(Chunk(text.substring(p[0], p[1]), b, GAP_SPLIT, map.copyOfRange(p[0], p[1])))
+                    }
+                    s = cut
+                    while (s < e && text[s] == ' ') s++
                 }
-                if (speakable(rest)) {
-                    out.add(Chunk(rest, b, if (lastInBlock) GAP_BLOCK else GAP_SENTENCE))
+                val r = trim(text, s, e)
+                if (r != null && speakable(text.substring(r[0], r[1]))) {
+                    out.add(
+                        Chunk(
+                            text.substring(r[0], r[1]), b,
+                            if (lastInBlock) GAP_BLOCK else GAP_SENTENCE,
+                            map.copyOfRange(r[0], r[1]),
+                        )
+                    )
                 } else if (lastInBlock && out.isNotEmpty() && out.last().block == b) {
-                    out[out.size - 1] = out.last().copy(gapMs = GAP_BLOCK)
+                    out[out.size - 1] = out.last().withGap(GAP_BLOCK)
                 }
             }
         }
         return out
+    }
+
+    private fun trim(text: String, start: Int, end: Int): IntArray? {
+        var s = start
+        var e = end
+        while (s < e && text[s].isWhitespace()) s++
+        while (e > s && text[e - 1].isWhitespace()) e--
+        return if (e > s) intArrayOf(s, e) else null
     }
 
     private fun maxLen(chunkIndex: Int) = when (chunkIndex) {
@@ -135,5 +207,48 @@ object TextChunker {
         }
         val space = s.lastIndexOf(' ', limit)
         return if (space > min / 2) space else limit
+    }
+}
+
+/** Estimates which word is being spoken from how far through a sentence the audio is. */
+object WordTiming {
+    private fun weight(c: Char): Float = when {
+        c.isLetterOrDigit() -> 1f
+        c == ' ' -> 0.35f
+        c == ',' || c == ';' || c == ':' || c == '—' || c == '–' -> 2.6f
+        c == '.' || c == '!' || c == '?' -> 3f
+        else -> 0.4f
+    }
+
+    private fun isWordChar(c: Char) = c.isLetterOrDigit() || c == '\'' || c == '’' || c == '-'
+
+    /** Returns [start, end) of the word at [fraction] (0..1) of [text], or null. */
+    fun wordAt(text: String, fraction: Float): IntArray? {
+        if (text.isEmpty()) return null
+        var total = 0f
+        for (c in text) total += weight(c)
+        val target = fraction.coerceIn(0f, 1f) * total
+        var acc = 0f
+        var i = text.length - 1
+        for (k in text.indices) {
+            acc += weight(text[k])
+            if (acc >= target) {
+                i = k
+                break
+            }
+        }
+        // Land on a word: prefer the next one if we're in a gap.
+        var j = i
+        while (j < text.length && !isWordChar(text[j])) j++
+        if (j >= text.length) {
+            j = i
+            while (j >= 0 && !isWordChar(text[j])) j--
+            if (j < 0) return null
+        }
+        var s = j
+        var e = j
+        while (s > 0 && isWordChar(text[s - 1])) s--
+        while (e < text.length && isWordChar(text[e])) e++
+        return intArrayOf(s, e)
     }
 }

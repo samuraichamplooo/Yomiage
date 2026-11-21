@@ -44,7 +44,13 @@ data class ReaderState(
     val fromScreen: Boolean = false,
     val message: String? = null,
     val session: Long = 0,
+    /** The sentence being spoken (null while idle or preparing). */
+    val chunk: Chunk? = null,
+    val chunkIndex: Int = -1,
 )
+
+/** The word being spoken, as [wordStart, wordEnd) in the current chunk's text. Updated ~10x a second. */
+data class Progress(val session: Long = 0, val chunkIndex: Int = -1, val wordStart: Int = -1, val wordEnd: Int = -1)
 
 /**
  * Plays text with Kokoro. Sentences are generated on one thread a little ahead of playback and
@@ -66,6 +72,9 @@ object Reader {
     private val _state = MutableStateFlow(ReaderState())
     val state: StateFlow<ReaderState> = _state
 
+    private val _progress = MutableStateFlow(Progress())
+    val progress: StateFlow<Progress> = _progress
+
     /** True while a session exists (playing, paused, finished or showing a message). */
     val isBusy: Boolean get() = _state.value.status != Status.Idle
 
@@ -75,13 +84,14 @@ object Reader {
 
     // ---------------------------------------------------------------- public controls
 
+    /** Starts reading and returns the session id. */
     fun read(
         blocks: List<TextBlock>,
         startBlock: Int = 0,
         startChar: Int = 0,
         fromScreen: Boolean = false,
         voice: Voice? = null,
-    ) {
+    ): Long {
         val settings = Prefs.current
         stopSession(keepFocus = true)
         val id = nextId++
@@ -90,18 +100,19 @@ object Reader {
                 status = Status.Error, session = id,
                 message = "Download the Kokoro voices in Yomiage first.",
             )
-            return
+            return id
         }
         val chunks = TextChunker.build(blocks, startBlock, startChar, settings.readUrls)
         if (chunks.isEmpty()) {
             _state.value = ReaderState(status = Status.Error, session = id, message = "There's no text to read here.")
-            return
+            return id
         }
         val s = Session(id, blocks, chunks, voice ?: Voices.byId(settings.voiceId), fromScreen, settings.speed)
         session = s
         requestFocus()
         registerNoisy()
         s.start()
+        return id
     }
 
     /** Shows the player bar with a status line while the screen is being looked at. */
@@ -199,6 +210,7 @@ object Reader {
     private fun stopSession(keepFocus: Boolean = false) {
         session?.stop()
         session = null
+        _progress.value = Progress()
         if (!keepFocus) {
             abandonFocus()
             unregisterNoisy()
@@ -286,6 +298,7 @@ object Reader {
         val n = chunks.size
         val audio = arrayOfNulls<ShortArray>(n)
         val lengths = IntArray(n) { -1 }
+        val speechLen = IntArray(n) { 1 }   // frames of actual speech (without the pause after it)
         val lock = ReentrantLock()
         val cond: Condition = lock.newCondition()
 
@@ -381,13 +394,16 @@ object Reader {
                 }
 
                 var pcm: ShortArray? = null
+                var speech = 1
                 var error: String? = null
                 try {
                     val samples = KokoroEngine.synth(ctx, text, v, sp)
                     if (samples == null) {
                         error = "The voice pack isn't installed."
                     } else {
-                        pcm = toPcm(samples, chunks[index].gapMs)
+                        val gap = SR * chunks[index].gapMs / 1000
+                        pcm = toPcm(samples, gap)
+                        speech = (pcm.size - gap).coerceAtLeast(1)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "synth failed for: $text", e)
@@ -409,6 +425,7 @@ object Reader {
                         } else if (pcm != null) {
                             audio[index] = pcm
                             lengths[index] = pcm.size
+                            speechLen[index] = speech
                             evictLocked()
                         }
                     }
@@ -699,6 +716,7 @@ object Reader {
                 status == Status.Preparing -> chunk?.text ?: ""
                 else -> chunk?.text ?: ""
             }
+            val speaking = status == Status.Playing || status == Status.Paused || status == Status.Buffering
             val st = ReaderState(
                 status = status,
                 caption = caption,
@@ -709,26 +727,36 @@ object Reader {
                 fromScreen = fromScreen,
                 message = failed,
                 session = id,
+                chunk = if (speaking || status == Status.Finished) chunk else null,
+                chunkIndex = if (speaking) idx else -1,
             )
             if (st != lastPublished) {
                 lastPublished = st
                 _state.value = st
             }
+            // Which word is being said, estimated from how far into the sentence the audio is.
+            val pr = if (speaking && chunk != null && heardChunk < n) {
+                val frac = heardOff.toFloat() / speechLen[idx]
+                val w = WordTiming.wordAt(chunk.text, frac)
+                Progress(id, idx, w?.get(0) ?: -1, w?.get(1) ?: -1)
+            } else {
+                Progress(id, -1, -1, -1)
+            }
+            if (pr != _progress.value) _progress.value = pr
         }
     }
 
-    /** Trims long silences at the ends of a sentence, adds the pause after it, and converts to 16-bit. */
-    private fun toPcm(samples: FloatArray, gapMs: Int): ShortArray {
+    /** Trims long silences at the ends of a sentence, adds [gap] frames of pause, and converts to 16-bit. */
+    private fun toPcm(samples: FloatArray, gap: Int): ShortArray {
         val threshold = 0.004f
         val margin = SR * 30 / 1000
         var first = 0
         while (first < samples.size && abs(samples[first]) < threshold) first++
         var last = samples.size - 1
         while (last > first && abs(samples[last]) < threshold) last--
-        if (first >= samples.size) return ShortArray(SR * gapMs / 1000)
+        if (first >= samples.size) return ShortArray(gap + 1)
         val from = max(0, first - margin)
         val to = min(samples.size, last + 1 + margin)
-        val gap = SR * gapMs / 1000
         val out = ShortArray(to - from + gap)
         for (i in from until to) {
             val v = (samples[i] * 32767f).coerceIn(-32768f, 32767f)

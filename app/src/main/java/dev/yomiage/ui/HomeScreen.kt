@@ -1,10 +1,14 @@
 package dev.yomiage.ui
 
+import android.app.StatusBarManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.drawable.Icon
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
@@ -69,6 +73,8 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.yomiage.BuildConfigInfo
 import dev.yomiage.R
 import dev.yomiage.data.Accent
+import dev.yomiage.data.BubbleMode
+import dev.yomiage.data.HighlightMode
 import dev.yomiage.data.Prefs
 import dev.yomiage.data.Settings as YSettings
 import dev.yomiage.data.Voice
@@ -79,6 +85,8 @@ import dev.yomiage.reader.Reader
 import dev.yomiage.reader.Status
 import dev.yomiage.reader.TextChunker
 import dev.yomiage.service.ReaderService
+import dev.yomiage.tile.ReadTileService
+import dev.yomiage.tile.TapTileService
 import dev.yomiage.tts.ModelManager
 import dev.yomiage.tts.ModelStatus
 import java.util.Locale
@@ -94,6 +102,7 @@ fun HomeScreen(pendingText: MutableState<String?>) {
     val running by ReaderService.running.collectAsState()
     val settings by Prefs.settings.collectAsState()
     val reader by Reader.state.collectAsState()
+    val progress by Reader.progress.collectAsState()
     var batteryOk by remember { mutableStateOf(isBatteryUnrestricted(context)) }
     var text by rememberSaveable { mutableStateOf(SAMPLE) }
 
@@ -165,6 +174,7 @@ fun HomeScreen(pendingText: MutableState<String?>) {
                     // The floating player only exists while screen reading is on, so show it here too.
                     PlayerBar(
                         state = reader,
+                        progress = progress,
                         onPlayPause = { Reader.togglePlay() },
                         onSeek = { Reader.seekBy(it) },
                         onSpeed = { Reader.setSpeed(it) },
@@ -180,6 +190,7 @@ fun HomeScreen(pendingText: MutableState<String?>) {
             }
         }
 
+        StartSection(context, settings)
         VoiceSection(settings, modelReady)
         ReadingSection(settings)
         AdvancedSection(context, settings, modelReady)
@@ -374,10 +385,10 @@ private fun HowToCard() {
     SectionLabel("How to use it")
     Group {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Tip("読", "Tap the bubble, then Read screen to hear the page from the top.")
-            Tip("☝", "Tap to start, then touch any sentence to read from there. Long-press the bubble for a shortcut.")
+            Tip("読", "Tap the bubble to read the screen from the top. Long-press it for Tap to start, image scanning and Hide.")
+            Tip("☝", "Tap to start, then touch any sentence to read from there.")
             Tip("⟲", "In the player, use 2 and 5 to jump back or ahead, and the speed chip to change speed.")
-            Tip("⋮", "Select text in any app and choose Read aloud.")
+            Tip("✦", "The sentence being read is highlighted on screen, and the word being spoken moves along it.")
             Tip("⇅", "Drag the bubble to either edge. Drag the player by its handle.")
         }
     }
@@ -388,6 +399,128 @@ private fun Tip(symbol: String, text: String) {
     Row(verticalAlignment = Alignment.Top) {
         Text(symbol, color = Seal, fontSize = 15.sp, modifier = Modifier.width(26.dp))
         Text(text, color = Color(0xFFD9D1C8), fontSize = 14.sp, lineHeight = 19.sp)
+    }
+}
+
+// -------------------------------------------------------------------- ways to start
+
+@Composable
+private fun StartSection(context: Context, settings: YSettings) {
+    var launcherOn by remember { mutableStateOf(isLauncherEnabled(context)) }
+    SectionLabel("Ways to start reading")
+    Group {
+        Column(Modifier.padding(16.dp)) {
+            Text("Floating bubble", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Tap it to read the screen. In Browsers only, it shows up in Chrome, Samsung Internet and other browsers, and stays out of the way everywhere else.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row {
+                FilterChip("Off", settings.bubbleMode == BubbleMode.OFF) { Prefs.update { it.copy(bubbleMode = BubbleMode.OFF) } }
+                Spacer(Modifier.width(8.dp))
+                FilterChip("Browsers only", settings.bubbleMode == BubbleMode.BROWSERS) { Prefs.update { it.copy(bubbleMode = BubbleMode.BROWSERS) } }
+                Spacer(Modifier.width(8.dp))
+                FilterChip("Always", settings.bubbleMode == BubbleMode.ALWAYS) { Prefs.update { it.copy(bubbleMode = BubbleMode.ALWAYS) } }
+            }
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Quick Settings tiles", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Swipe down from the top and tap Read screen. The shade closes and Yomiage reads the app underneath. Tap it again to stop.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            if (Build.VERSION.SDK_INT >= 33) {
+                Spacer(Modifier.height(10.dp))
+                Row {
+                    StepButton("Add Read screen") {
+                        addTile(context, ReadTileService::class.java, "Read screen", R.drawable.ic_lines)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    StepButton("Add Tap to read", outlined = true) {
+                        addTile(context, TapTileService::class.java, "Tap to read", R.drawable.ic_tap)
+                    }
+                }
+            }
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Voice: “Hey Google, open Read My Screen”", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Read My Screen is a second icon in your app drawer. Opening it reads whatever app is underneath, " +
+                    "so you can ask Gemini to open it while you're on a page.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+        }
+        SwitchRow("Show the Read My Screen icon", "Needed for the voice command and the side button.", launcherOn) { on ->
+            setLauncherEnabled(context, on)
+            launcherOn = on
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Side button double press", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Settings → Advanced features → Side button → Double press → Open app → Read My Screen. " +
+                    "Then double-press the side button on any page to start reading.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            StepButton("Open Advanced features", outlined = true) { openAdvancedFeatures(context) }
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Selected text", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Select text in any app, then choose Read aloud from the menu. Long-press the Yomiage icon for Read screen and Tap to start shortcuts.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+        }
+    }
+}
+
+private fun launcherComponent(context: Context) = ComponentName(context, "dev.yomiage.ReadScreenLauncher")
+
+private fun isLauncherEnabled(context: Context): Boolean =
+    context.packageManager.getComponentEnabledSetting(launcherComponent(context)) !=
+        PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+
+private fun setLauncherEnabled(context: Context, on: Boolean) {
+    context.packageManager.setComponentEnabledSetting(
+        launcherComponent(context),
+        if (on) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+        PackageManager.DONT_KILL_APP,
+    )
+}
+
+private fun addTile(context: Context, cls: Class<*>, label: String, icon: Int) {
+    if (Build.VERSION.SDK_INT < 33) return
+    try {
+        val sbm = context.getSystemService(StatusBarManager::class.java)
+        sbm.requestAddTileService(
+            ComponentName(context, cls), label, Icon.createWithResource(context, icon), context.mainExecutor,
+        ) { result ->
+            val msg = when (result) {
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "Tile added"
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "That tile is already in Quick Settings"
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_NOT_ADDED -> null
+                else -> "Add it from the Quick Settings edit screen instead"
+            }
+            if (msg != null) Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    } catch (e: Exception) {
+        Toast.makeText(context, "Add it from the Quick Settings edit screen instead", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun openAdvancedFeatures(context: Context) {
+    // Samsung's Advanced features page, or the main Settings screen elsewhere.
+    try {
+        context.startActivity(
+            Intent("com.samsung.android.settings.ADVANCED_FEATURES").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (e: Exception) {
+        open(context, Intent(Settings.ACTION_SETTINGS))
     }
 }
 
@@ -529,8 +662,20 @@ private fun ReadingSection(settings: YSettings) {
             )
         }
         Divider()
-        SwitchRow("Outline what's being read", "Draws a box around the paragraph on screen.", settings.highlight) { on ->
-            Prefs.update { it.copy(highlight = on) }
+        Column(Modifier.padding(16.dp)) {
+            Text("Highlight while reading", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Marks the sentence on screen so you can follow along. Word by word also moves a marker with the voice.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row {
+                FilterChip("Off", settings.highlightMode == HighlightMode.OFF) { Prefs.update { it.copy(highlightMode = HighlightMode.OFF) } }
+                Spacer(Modifier.width(8.dp))
+                FilterChip("Sentence", settings.highlightMode == HighlightMode.SENTENCE) { Prefs.update { it.copy(highlightMode = HighlightMode.SENTENCE) } }
+                Spacer(Modifier.width(8.dp))
+                FilterChip("Word by word", settings.highlightMode == HighlightMode.WORD) { Prefs.update { it.copy(highlightMode = HighlightMode.WORD) } }
+            }
         }
         Divider()
         SwitchRow("Keep reading below the screen", "On long web pages, keep going past the bottom when the app allows it.", settings.readBelow) { on ->
@@ -540,10 +685,7 @@ private fun ReadingSection(settings: YSettings) {
         SwitchRow("Scan images when there's no text", "Uses on-device text recognition for pictures, PDFs and apps that hide their text.", settings.autoOcr) { on ->
             Prefs.update { it.copy(autoOcr = on) }
         }
-        Divider()
-        SwitchRow("Floating bubble", "Turn off to start reading only from the Accessibility button or Read aloud.", settings.showBubble) { on ->
-            Prefs.update { it.copy(showBubble = on) }
-        }
+
         Divider()
         SwitchRow("Read web addresses", "When off, a link is read as \"link\".", settings.readUrls) { on ->
             Prefs.update { it.copy(readUrls = on) }

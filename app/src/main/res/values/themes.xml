@@ -7,4 +7,5 @@
     </style>
     <color name="window_dark">#FF0E0D0C</color>
     <color name="ic_launcher_background">#FF141211</color>
+    <color name="ic_read_background">#FFD8462B</color>
 </resources>

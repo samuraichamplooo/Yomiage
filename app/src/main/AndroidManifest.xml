@@ -25,7 +25,40 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+
+        <!-- Reads the app underneath and closes at once. Its launcher entry ("Read My Screen") is what
+             "Hey Google, open Read My Screen" and a side-button double press can open. -->
+        <activity
+            android:name=".ReadScreenActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/read_my_screen"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="dev.yomiage.READ_SCREEN" />
+                <action android:name="dev.yomiage.TAP_TO_READ" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity-alias
+            android:name=".ReadScreenLauncher"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_read_screen"
+            android:label="@string/read_my_screen"
+            android:targetActivity=".ReadScreenActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- "Read aloud" in the text-selection menu and the share sheet. -->
         <activity
@@ -47,6 +80,28 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".tile.ReadTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_lines"
+            android:label="@string/tile_read"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".tile.TapTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tap"
+            android:label="@string/tile_tap"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".service.ReaderService"
