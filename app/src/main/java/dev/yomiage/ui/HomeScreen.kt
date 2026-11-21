@@ -837,15 +837,18 @@ private fun PlayerSection(context: Context, settings: YSettings) {
         Column(Modifier.padding(16.dp)) {
             Text("Reading controls", color = PaperWhite, fontSize = 15.sp)
             Text(
-                "The controls pop up when reading starts and stay until you tap the eye button. To bring them back " +
-                    "(or hide them again), use your Read My Screen gesture: you stay on the page. Tapping the reading " +
-                    "controls in your quick panel brings them back too.",
+                "The controls pop up when reading starts. Tap the dot button (top left of the player) to shrink them " +
+                    "to a small dot: tap the dot to get them back, hold it to pause. The eye button hides them " +
+                    "completely; your Read My Screen gesture or the quick panel controls bring them back, and you stay on the page.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(10.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip("Show when reading starts", settings.playerVisibility != PlayerVisibility.NEVER) {
+                FilterChip("Show when reading starts", settings.playerVisibility == PlayerVisibility.ALWAYS) {
                     Prefs.update { it.copy(playerVisibility = PlayerVisibility.ALWAYS) }
+                }
+                FilterChip("Start as a dot", settings.playerVisibility == PlayerVisibility.DOT) {
+                    Prefs.update { it.copy(playerVisibility = PlayerVisibility.DOT) }
                 }
                 FilterChip("Start hidden", settings.playerVisibility == PlayerVisibility.NEVER) {
                     Prefs.update { it.copy(playerVisibility = PlayerVisibility.NEVER) }

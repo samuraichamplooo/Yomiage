@@ -2,7 +2,17 @@ package dev.yomiage.overlay
 
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Handler
+import android.os.Looper
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import android.view.View
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
@@ -157,6 +167,8 @@ class PlayerActions(
     val onBackToPage: (() -> Unit)? = null,
     val onMinimize: (() -> Unit)? = null,
     val onHide: (() -> Unit)? = null,
+    /** Shrinks the player down to a small dot. */
+    val onDot: (() -> Unit)? = null,
     val onExpand: () -> Unit = {},
     val onToggleText: (() -> Unit)? = null,
     val onDrag: (Float, Float) -> Unit = { _, _ -> },
@@ -202,9 +214,19 @@ fun PlayerBar(
             .fillMaxWidth(),
     ) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, bottom = 10.dp)) {
-            // Drag handle (move the bar up or down), with a hide button at the end.
+            // Drag handle (move the bar up or down): shrink to a dot on the left, hide on the right.
             Row(Modifier.fillMaxWidth().height(30.dp), verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.width(30.dp))
+                actions.onDot?.let { shrink ->
+                    Box(
+                        Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = shrink),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(painterResource(R.drawable.ic_dot), "Shrink to a dot", tint = Vermilion, modifier = Modifier.size(17.dp))
+                    }
+                } ?: Spacer(Modifier.width(30.dp))
                 Box(
                     Modifier
                         .weight(1f)
@@ -368,6 +390,7 @@ fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
                 )
             }
             SmallIcon(R.drawable.ic_expand, "Show the full player", actions.onExpand)
+            actions.onDot?.let { SmallIcon(R.drawable.ic_dot, "Shrink to a dot", it, tint = Vermilion) }
             actions.onHide?.let { SmallIcon(R.drawable.ic_hide, "Hide the player", it) }
         }
     }
@@ -689,5 +712,131 @@ fun HighlightLayer(sentence: List<RectF>, word: List<RectF>, outline: Rect?, out
             if (outlineFill) drawRoundRect(Vermilion.copy(alpha = 0.10f), tl, sz, CornerRadius(10.dp.toPx()))
             drawRoundRect(Vermilion.copy(alpha = 0.8f), tl, sz, CornerRadius(10.dp.toPx()), style = Stroke(width = 2.dp.toPx()))
         }
+    }
+}
+
+
+/**
+ * The player shrunk down to a small dot. It breathes while reading, shows two little pause bars
+ * when paused, spins while getting ready, and a thin ring shows how far along it is.
+ * Tap it for the controls, hold it to pause or carry on, drag it anywhere.
+ */
+@Composable
+fun PlayerDot(
+    state: ReaderState,
+    onTap: () -> Unit,
+    onHold: () -> Unit,
+    onDrag: (Float, Float) -> Unit,
+    onDragEnd: () -> Unit,
+) {
+    val playing = state.status == Status.Playing
+    val busy = state.status == Status.Buffering || state.status == Status.Preparing
+    val motion = rememberInfiniteTransition(label = "dot")
+    val breath by motion.animateFloat(
+        0f, 1f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "breath",
+    )
+    val spin by motion.animateFloat(
+        0f, 360f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart), label = "spin",
+    )
+    val gesture = remember { DotGesture() }
+    val view = LocalView.current
+    val progress = if (state.total > 0) (state.index.toFloat() / state.total).coerceIn(0f, 1f) else 0f
+    Box(
+        Modifier
+            .size(56.dp)
+            .pointerInteropFilter { e -> gesture.handle(e, view, onTap, onHold, onDrag, onDragEnd) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val c = center
+            val core = 10.dp.toPx()
+            val ringR = core + 4.dp.toPx()
+            if (playing) {
+                // A soft ring that grows and fades, like breathing, while it reads.
+                val r = ringR + (size.minDimension / 2f - ringR) * breath
+                drawCircle(Vermilion.copy(alpha = 0.5f * (1f - breath)), r, c)
+            }
+            // A dark backing so the dot stands out on any page.
+            drawCircle(Color(0x99141211), ringR + 2.dp.toPx(), c)
+            drawCircle(Color(0x33FFFFFF), ringR, c, style = Stroke(1.5f.dp.toPx()))
+            val arcTopLeft = Offset(c.x - ringR, c.y - ringR)
+            val arcSize = Size(ringR * 2, ringR * 2)
+            if (busy) {
+                drawArc(Paper, spin, 100f, false, arcTopLeft, arcSize, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+            } else if (progress > 0f) {
+                drawArc(Paper, -90f, 360f * progress, false, arcTopLeft, arcSize, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+            }
+            drawCircle(Vermilion, core, c)
+            if (!playing && !busy) {
+                // Paused: two little bars.
+                val w = 2.5f.dp.toPx()
+                val h = 8.dp.toPx()
+                val gap = 1.8f.dp.toPx()
+                drawRoundRect(Paper, Offset(c.x - gap - w, c.y - h / 2), Size(w, h), CornerRadius(w / 2))
+                drawRoundRect(Paper, Offset(c.x + gap, c.y - h / 2), Size(w, h), CornerRadius(w / 2))
+            }
+        }
+    }
+}
+
+/** Tells a tap, a hold and a drag apart, in screen positions (the window moves with the finger). */
+private class DotGesture {
+    private val handler = Handler(Looper.getMainLooper())
+    private var downX = 0f
+    private var downY = 0f
+    private var lastX = 0f
+    private var lastY = 0f
+    private var dragging = false
+    private var held = false
+    private var hold: Runnable? = null
+
+    fun handle(
+        e: MotionEvent,
+        view: View,
+        onTap: () -> Unit,
+        onHold: () -> Unit,
+        onDrag: (Float, Float) -> Unit,
+        onDragEnd: () -> Unit,
+    ): Boolean {
+        val slop = 10f * view.resources.displayMetrics.density
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = e.rawX
+                downY = e.rawY
+                lastX = e.rawX
+                lastY = e.rawY
+                dragging = false
+                held = false
+                hold?.let { handler.removeCallbacks(it) }
+                hold = Runnable {
+                    if (!dragging) {
+                        held = true
+                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        onHold()
+                    }
+                }.also { handler.postDelayed(it, 450) }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!dragging && !held && kotlin.math.hypot(e.rawX - downX, e.rawY - downY) > slop) {
+                    dragging = true
+                    hold?.let { handler.removeCallbacks(it) }
+                }
+                if (dragging) onDrag(e.rawX - lastX, e.rawY - lastY)
+                lastX = e.rawX
+                lastY = e.rawY
+            }
+            MotionEvent.ACTION_UP -> {
+                hold?.let { handler.removeCallbacks(it) }
+                when {
+                    dragging -> onDragEnd()
+                    !held -> onTap()
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                hold?.let { handler.removeCallbacks(it) }
+                if (dragging) onDragEnd()
+            }
+        }
+        return true
     }
 }

@@ -20,6 +20,8 @@ data class Settings(
     val playerMini: Boolean = false, // player shrunk to a small pill
     val miniXdp: Int = 12,
     val miniYdp: Int = 96,
+    val dotXdp: Int = 10,     // the shrunk-down dot, from the right edge
+    val dotYdp: Int = 200,    // and from the bottom
     val geminiKey: String = "",      // the user's own Google AI Studio key, for simple explanations
     val geminiModel: String = "",    // last model that worked
     val audience: String = "",       // "explain things for…", e.g. a nursing student
@@ -48,6 +50,7 @@ object HighlightMode {
 object PlayerVisibility {
     const val ALWAYS = 0     // pops up when reading starts and stays until you hide it
     const val NEVER = 2      // starts hidden: bring it up with the gesture or the quick panel
+    const val DOT = 3        // starts shrunk to a small dot: tap it for the controls
 }
 
 object BubbleMode {
@@ -86,6 +89,8 @@ object Prefs {
             playerMini = sp.getBoolean("playerMini", d.playerMini),
             miniXdp = sp.getInt("miniXdp", d.miniXdp),
             miniYdp = sp.getInt("miniYdp", d.miniYdp),
+            dotXdp = sp.getInt("dotXdp", d.dotXdp),
+            dotYdp = sp.getInt("dotYdp", d.dotYdp),
             geminiKey = sp.getString("geminiKey", d.geminiKey) ?: "",
             geminiModel = sp.getString("geminiModel", d.geminiModel) ?: "",
             audience = sp.getString("audience", d.audience) ?: "",
@@ -93,7 +98,7 @@ object Prefs {
             showText = sp.getBoolean("showText", d.showText),
             // The old "at start, then hide" setting (1) became the normal behaviour: shown until you hide it.
             playerVisibility = sp.getInt("playerVisibility", d.playerVisibility)
-                .let { if (it == PlayerVisibility.NEVER) it else PlayerVisibility.ALWAYS },
+                .let { if (it == PlayerVisibility.NEVER || it == PlayerVisibility.DOT) it else PlayerVisibility.ALWAYS },
             groqKey = sp.getString("groqKey", d.groqKey) ?: "",
             useOnDevice = sp.getBoolean("useOnDevice", d.useOnDevice),
             followScroll = sp.getBoolean("followScroll", d.followScroll),
@@ -122,6 +127,8 @@ object Prefs {
             .putBoolean("playerMini", s.playerMini)
             .putInt("miniXdp", s.miniXdp)
             .putInt("miniYdp", s.miniYdp)
+            .putInt("dotXdp", s.dotXdp)
+            .putInt("dotYdp", s.dotYdp)
             .putString("geminiKey", s.geminiKey)
             .putString("geminiModel", s.geminiModel)
             .putString("audience", s.audience)

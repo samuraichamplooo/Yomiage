@@ -39,6 +39,7 @@ import kotlin.math.hypot
 class Overlay(private val service: ReaderService, private val follow: FollowAlong) {
     private companion object {
         var hideTipShown = false
+        var dotTipShown = false
     }
 
     private val wm = service.getSystemService(WindowManager::class.java)
@@ -49,6 +50,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     private var bubble: Win? = null
     private var menu: Win? = null
     private var bar: Win? = null
+    private var dot: Win? = null
     private var tap: Win? = null
     private var highlight: Win? = null
     private var menuClosedAt = 0L
@@ -57,17 +59,32 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     // starts and stays until you hide it; the gesture or the quick panel brings it back.
     private var running = false
     private var shown = true
+    // Shrunk down to a small dot (tap it to get the controls back).
+    private var dotted = false
     private var lastVisibility = Prefs.current.playerVisibility
 
-    /** Brings the player back for this reading (the gesture, or the quick panel controls). */
+    /** Brings the player back for this reading (the gesture, the dot, or the quick panel controls). */
     fun revealPlayer() {
         shown = true
+        dotted = false
         refresh()
+    }
+
+    /** Shrinks the player down to a small dot. */
+    fun shrinkToDot() {
+        shown = true
+        dotted = true
+        refresh()
+        if (!dotTipShown) {
+            dotTipShown = true
+            Toast.makeText(service, "Tap the dot to bring the controls back. Hold it to pause. Drag to move it.", Toast.LENGTH_LONG).show()
+        }
     }
 
     /** Hides the player for the rest of this reading, until it's brought back. */
     fun hidePlayer() {
         shown = false
+        dotted = false
         refresh()
         if (!hideTipShown) {
             hideTipShown = true
@@ -79,9 +96,9 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
         }
     }
 
-    /** For the gesture / Read My Screen while reading: show the player if hidden, hide it if showing. */
+    /** For the gesture / Read My Screen while reading: show the player if hidden (or a dot), hide it if showing. */
     fun togglePlayer() {
-        if (shown) hidePlayer() else revealPlayer()
+        if (shown && !dotted) hidePlayer() else revealPlayer()
     }
 
     private var toastedSession = -1L
@@ -138,12 +155,14 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             // A new reading run (from the bubble, a tile, a gesture, Read aloud…): the controls pop up.
             running = true
             shown = settings.playerVisibility != PlayerVisibility.NEVER
+            dotted = settings.playerVisibility == PlayerVisibility.DOT
         } else if (!active && running) {
             running = false
         }
         if (settings.playerVisibility != lastVisibility) {
             lastVisibility = settings.playerVisibility
             shown = settings.playerVisibility != PlayerVisibility.NEVER
+            dotted = settings.playerVisibility == PlayerVisibility.DOT
         }
         if (active && ReadingView.open.value) {
             // The reading view is showing the text with its own controls.
@@ -154,14 +173,23 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             closeMenu()
             hideBubble()
             ensureHighlight()
-            if (!shown) {
+            if (shown && dotted) {
                 removeBar()
+                showDot()
+                if (state.status == Status.Error && state.session != toastedSession) {
+                    toastedSession = state.session
+                    Toast.makeText(service, state.message ?: "Something went wrong.", Toast.LENGTH_LONG).show()
+                }
+            } else if (!shown) {
+                removeBar()
+                removeDot()
                 // With no player on screen, say what went wrong in a pop-up instead.
                 if (state.status == Status.Error && state.session != toastedSession) {
                     toastedSession = state.session
                     Toast.makeText(service, state.message ?: "Something went wrong.", Toast.LENGTH_LONG).show()
                 }
             } else {
+                removeDot()
                 showBar()
             }
         } else {
@@ -193,10 +221,11 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     fun destroy() {
         main.removeCallbacks(tapTimeout)
         main.removeCallbacks(fade)
-        for (w in listOf(tap, menu, bar, highlight, bubble)) remove(w)
+        for (w in listOf(tap, menu, bar, dot, highlight, bubble)) remove(w)
         tap = null
         menu = null
         bar = null
+        dot = null
         highlight = null
         bubble = null
     }
@@ -204,7 +233,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     /** Hides every window, e.g. so a screenshot only shows the app underneath. */
     fun setInvisible(invisible: Boolean) {
         val v = if (invisible) View.INVISIBLE else View.VISIBLE
-        for (w in listOf(bubble, menu, bar, highlight, tap)) w?.view?.visibility = v
+        for (w in listOf(bubble, menu, bar, dot, highlight, tap)) w?.view?.visibility = v
     }
 
     // ---------------------------------------------------------------- bubble
@@ -409,6 +438,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             onBackToPage = { Explainer.backToPage() },
             onMinimize = { Prefs.update { it.copy(playerMini = true) } },
             onHide = { hidePlayer() },
+            onDot = { shrinkToDot() },
             onExpand = { Prefs.update { it.copy(playerMini = false) } },
             onToggleText = { Prefs.update { it.copy(showText = !it.showText) } },
             onDrag = { dx, dy ->
@@ -491,8 +521,54 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
 
     private fun hideBar() {
         removeBar()
+        removeDot()
         remove(highlight)
         highlight = null
+    }
+
+    // ---------------------------------------------------------------- the dot
+
+    private fun showDot() {
+        if (dot != null) return
+        val st = Prefs.current
+        val p = params(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+        p.gravity = Gravity.BOTTOM or Gravity.END
+        p.x = dp(st.dotXdp)
+        p.y = dp(st.dotYdp)
+        clampDot(p)
+        val w = Win(ComposeView(service), p, OverlayOwner())
+        w.owner.attachTo(w.view)
+        w.view.setContent {
+            val state by Reader.state.collectAsState()
+            PlayerDot(
+                state,
+                onTap = { revealPlayer() },
+                onHold = { Reader.togglePlay() },
+                onDrag = { dx, dy ->
+                    w.params.x = (w.params.x - dx).toInt()
+                    w.params.y = (w.params.y - dy).toInt()
+                    clampDot(w.params)
+                    relayout(w)
+                },
+                onDragEnd = {
+                    val d = service.resources.displayMetrics.density
+                    Prefs.update { it.copy(dotXdp = (w.params.x / d).toInt(), dotYdp = (w.params.y / d).toInt()) }
+                },
+            )
+        }
+        wm.addView(w.view, p)
+        dot = w
+    }
+
+    private fun clampDot(p: LayoutParams) {
+        val s = ScreenScanner.screenBounds(service)
+        p.x = p.x.coerceIn(-dp(8), (s.width() - dp(48)).coerceAtLeast(0))
+        p.y = p.y.coerceIn(0, (s.height() - dp(64)).coerceAtLeast(0))
+    }
+
+    private fun removeDot() {
+        remove(dot)
+        dot = null
     }
 
     private fun visiblePart(r: Rect): Rect? {
