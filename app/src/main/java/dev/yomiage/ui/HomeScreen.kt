@@ -93,6 +93,9 @@ import dev.yomiage.theme.ThemeKind
 import dev.yomiage.data.Settings as YSettings
 import dev.yomiage.data.Voice
 import dev.yomiage.data.Voices
+import dev.yomiage.data.VoiceEngine
+import dev.yomiage.tts.Delivery
+import dev.yomiage.tts.SupertonicPack
 import dev.yomiage.overlay.PlayerActions
 import dev.yomiage.overlay.PlayerBar
 import dev.yomiage.overlay.speedLabel
@@ -812,7 +815,14 @@ private fun SimpleSection(context: Context, settings: YSettings) {
             "Always read the screen simplified",
             "The bubble, tiles and Read My Screen read the plain-language version instead of the original.",
             settings.alwaysSimple,
-        ) { on -> Prefs.update { it.copy(alwaysSimple = on) } }
+        ) { on -> Prefs.update { it.copy(alwaysSimple = on, alwaysLively = if (on) false else it.alwaysLively) } }
+        Divider()
+        SwitchRow(
+            "Always read as a lively narrator",
+            "AI retells each page like an engaging teacher or podcast host, keeping every fact and key term. Free with " +
+                "your Gemini or Groq key. Also in the bubble's long-press menu.",
+            settings.alwaysLively,
+        ) { on -> Prefs.update { it.copy(alwaysLively = on, alwaysSimple = if (on) false else it.alwaysSimple) } }
     }
 }
 
@@ -1011,38 +1021,125 @@ private fun notificationsAllowed(context: Context): Boolean =
 private fun VoiceSection(settings: YSettings, modelReady: Boolean) {
     var allLanguages by rememberSaveable { mutableStateOf(false) }
     val selected = Voices.byId(settings.voiceId)
+    var tab by rememberSaveable { mutableStateOf(selected.engine.ordinal) }
+    val engine = VoiceEngine.entries[tab.coerceIn(0, VoiceEngine.entries.size - 1)]
+    val context = LocalContext.current
+    val stStatus by SupertonicPack.status.collectAsState()
+    LaunchedEffect(Unit) { SupertonicPack.refresh(context) }
+    val stReady = stStatus is ModelStatus.Ready
     SectionLabel("Voice")
     Group {
-        Row(
-            Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(selected.name, color = PaperWhite, fontSize = 18.sp, fontWeight = FontWeight.Medium)
-                Text("${selected.accent.label} · ${if (selected.female) "Female" else "Male"}", color = Faint, fontSize = 13.sp)
-            }
-            FilterChip("English", !allLanguages) { allLanguages = false }
-            Spacer(Modifier.width(6.dp))
-            FilterChip("All", allLanguages) { allLanguages = true }
-        }
-        if (!modelReady) {
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp)) {
+            Text(selected.name, color = PaperWhite, fontSize = 18.sp, fontWeight = FontWeight.Medium)
             Text(
-                "Download the voices to hear previews.",
+                listOfNotNull(
+                    selected.engine.label,
+                    selected.vibe ?: selected.accent.label,
+                    if (selected.female) "Female" else "Male",
+                ).joinToString(" · "),
                 color = Faint, fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             )
-        }
-        val accents = if (allLanguages) Accent.entries else listOf(Accent.US, Accent.UK)
-        for (accent in accents) {
-            val voices = Voices.all.filter { it.accent == accent }
-                .sortedWith(compareBy<Voice>({ !it.top }, { it.name }))
+            Spacer(Modifier.height(12.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip("Kokoro", engine == VoiceEngine.KOKORO) { tab = VoiceEngine.KOKORO.ordinal }
+                FilterChip("Supertonic", engine == VoiceEngine.SUPERTONIC) { tab = VoiceEngine.SUPERTONIC.ordinal }
+                FilterChip("Gemini ✦", engine == VoiceEngine.GEMINI) { tab = VoiceEngine.GEMINI.ordinal }
+                FilterChip("Orpheus ✦", engine == VoiceEngine.ORPHEUS) { tab = VoiceEngine.ORPHEUS.ordinal }
+            }
+            Spacer(Modifier.height(10.dp))
             Text(
-                accent.label + (accent.note?.let { " · $it" } ?: ""),
-                color = Seal, fontSize = 12.sp,
-                modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp),
+                when (engine) {
+                    VoiceEngine.KOKORO -> "On your phone: free, private, works offline. 54 voices in 9 languages."
+                    VoiceEngine.SUPERTONIC -> "On your phone: free, private, works offline. 10 natural, quick voices " +
+                        "(a one-time download)."
+                    VoiceEngine.GEMINI -> "Online and very expressive: about 30 voices that read the way you ask (pick a " +
+                        "delivery below). Uses your Gemini key. Google's free allowance only covers a few minutes a day; " +
+                        "with billing on, it's roughly \$0.55–\$0.80 per hour of listening. When the limit's reached, " +
+                        "Heart reads instead. The text is sent to Google."
+                    VoiceEngine.ORPHEUS -> "Online and the most expressive: 6 voices that can sound cheerful, dramatic " +
+                        "or excited (pick a delivery below). Uses your Groq key. The free allowance is a few minutes a " +
+                        "day; paid, it's about \$1.20 per hour of listening. Groq may ask you to accept the model's terms " +
+                        "once at console.groq.com. The text is sent to Groq."
+                },
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
-            for (v in voices) {
-                VoiceRow(v, v.id == selected.id, modelReady)
+            if (engine == VoiceEngine.GEMINI || engine == VoiceEngine.ORPHEUS) {
+                val hasKey = if (engine == VoiceEngine.GEMINI) settings.geminiKey.isNotBlank() else settings.groqKey.isNotBlank()
+                if (!hasKey) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Add your ${if (engine == VoiceEngine.GEMINI) "Gemini" else "Groq"} key under Simple explanations first.",
+                        color = Bad, fontSize = 12.sp,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("Delivery", color = SoftText, fontSize = 13.sp)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Delivery.names.forEachIndexed { i, label ->
+                        FilterChip(label, settings.delivery == i) { Prefs.update { it.copy(delivery = i) } }
+                    }
+                }
+            }
+            if (engine == VoiceEngine.SUPERTONIC && !stReady) {
+                Spacer(Modifier.height(10.dp))
+                when (val st = stStatus) {
+                    is ModelStatus.Downloading -> Text(
+                        "Downloading… " + (if (st.total > 0) "${st.bytes * 100 / st.total}%" else "${st.bytes / 1_048_576} MB"),
+                        color = PaperWhite, fontSize = 13.sp,
+                    )
+                    is ModelStatus.Unpacking -> Text("Unpacking… ${(st.fraction * 100).toInt()}%", color = PaperWhite, fontSize = 13.sp)
+                    is ModelStatus.Failed -> {
+                        Text(st.message, color = Bad, fontSize = 12.sp)
+                        Spacer(Modifier.height(6.dp))
+                        StepButton("Try again") { SupertonicPack.start(context) }
+                    }
+                    else -> StepButton("Download Supertonic voices") { SupertonicPack.start(context) }
+                }
+            }
+            if (engine == VoiceEngine.KOKORO) {
+                Spacer(Modifier.height(10.dp))
+                Row {
+                    FilterChip("English", !allLanguages) { allLanguages = false }
+                    Spacer(Modifier.width(6.dp))
+                    FilterChip("All languages", allLanguages) { allLanguages = true }
+                }
+            }
+        }
+        when (engine) {
+            VoiceEngine.KOKORO -> {
+                if (!modelReady) {
+                    Text(
+                        "Download the voices to hear previews.",
+                        color = Faint, fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
+                val accents = if (allLanguages) Accent.entries else listOf(Accent.US, Accent.UK)
+                for (accent in accents) {
+                    val voices = Voices.all.filter { it.accent == accent }
+                        .sortedWith(compareBy<Voice>({ !it.top }, { it.name }))
+                    Text(
+                        accent.label + (accent.note?.let { " · $it" } ?: ""),
+                        color = Seal, fontSize = 12.sp,
+                        modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp),
+                    )
+                    for (v in voices) VoiceRow(v, v.id == selected.id, modelReady)
+                }
+            }
+            else -> {
+                val list = when (engine) {
+                    VoiceEngine.SUPERTONIC -> Voices.supertonic
+                    VoiceEngine.GEMINI -> Voices.gemini
+                    else -> Voices.orpheus
+                }.sortedWith(compareBy<Voice>({ !it.top }, { it.name }))
+                val usable = when (engine) {
+                    VoiceEngine.SUPERTONIC -> stReady
+                    VoiceEngine.GEMINI -> settings.geminiKey.isNotBlank()
+                    else -> settings.groqKey.isNotBlank()
+                }
+                Spacer(Modifier.height(6.dp))
+                for (v in list) VoiceRow(v, v.id == selected.id, usable)
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -1097,8 +1194,8 @@ private fun VoiceRow(v: Voice, selected: Boolean, modelReady: Boolean) {
                 }
             }
             Text(
-                (if (v.female) "Female" else "Male") + " · " + v.code,
-                color = Faint, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+                (if (v.female) "Female" else "Male") + " · " + (v.vibe ?: v.code),
+                color = Faint, fontSize = 12.sp, fontFamily = if (v.vibe == null) FontFamily.Monospace else FontFamily.Default,
             )
         }
         Box(

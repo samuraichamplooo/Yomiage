@@ -533,9 +533,11 @@ class ReaderService : AccessibilityService() {
         simple: Boolean = Prefs.current.alwaysSimple && Explainer.hasKey(),
         /** Open the reading view once reading starts. */
         view: Boolean = false,
+        /** Retold by AI as a lively narrator. */
+        lively: Boolean = !simple && Prefs.current.alwaysLively && Explainer.hasKey(),
     ) {
         overlay?.closeMenu()
-        if (!ModelManager.isReady(this)) {
+        if (!Reader.canSpeak()) {
             Reader.showMessage("Download the Kokoro voices in Yomiage first.")
             return
         }
@@ -563,12 +565,12 @@ class ReaderService : AccessibilityService() {
                 Reader.showMessage("I couldn't find any text on this screen.")
                 return@launch
             }
-            if (simple) {
+            if (simple || lively) {
                 val original = blocks
-                Explainer.readSimplified(blocks.map { TextBlock(it.text) }) {
+                Explainer.readSimplified(blocks.map { TextBlock(it.text) }, lively = lively && !simple, fallback = {
                     val id = Reader.read(original.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
                     attachScreen(id, original)
-                }
+                })
             } else if (fromOcr) {
                 val id = Reader.read(blocks.map { TextBlock(it.text, it.bounds) }, fromScreen = true)
                 screenPkg = null

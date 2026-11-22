@@ -20,7 +20,10 @@ import androidx.core.content.ContextCompat
 import dev.yomiage.data.Prefs
 import dev.yomiage.data.Voice
 import dev.yomiage.data.Voices
+import dev.yomiage.data.VoiceEngine
 import dev.yomiage.tts.KokoroEngine
+import dev.yomiage.tts.SupertonicPack
+import dev.yomiage.tts.VoiceRouter
 import dev.yomiage.tts.ModelManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -121,19 +124,22 @@ object Reader {
         val settings = Prefs.current
         stopSession(keepFocus = true)
         val id = nextId++
-        if (!ModelManager.isReady(app)) {
+        val v = voice ?: Voices.byId(settings.voiceId)
+        val canSpeak = ModelManager.isReady(app) || v.online ||
+            (v.engine == VoiceEngine.SUPERTONIC && SupertonicPack.isReady(app))
+        if (!canSpeak) {
             _state.value = ReaderState(
                 status = Status.Error, session = id,
                 message = "Download the Kokoro voices in Yomiage first.",
             )
             return id
         }
-        val chunks = TextChunker.build(blocks, startBlock, startChar, settings.readUrls)
+        val chunks = TextChunker.merge(TextChunker.build(blocks, startBlock, startChar, settings.readUrls), mergeSize(v))
         if (chunks.isEmpty() && !open) {
             _state.value = ReaderState(status = Status.Error, session = id, message = "There's no text to read here.")
             return id
         }
-        val s = Session(id, blocks, chunks, voice ?: Voices.byId(settings.voiceId), fromScreen, settings.speed)
+        val s = Session(id, blocks, chunks, v, fromScreen, settings.speed)
         s.open = open
         s.label = label
         s.waiting = waiting
@@ -163,7 +169,9 @@ object Reader {
         s.withLock {
             if (more.isNotEmpty()) {
                 val offset = s.blocks.size
-                val built = TextChunker.build(more, 0, 0, Prefs.current.readUrls, rampFrom = s.n)
+                val built = TextChunker.merge(
+                    TextChunker.build(more, 0, 0, Prefs.current.readUrls, rampFrom = s.n), mergeSize(s.voice), keepFirst = -1,
+                )
                 s.blocks = s.blocks + more
                 for (c in built) {
                     s.chunks.add(c.withBlock(c.block + offset))
@@ -359,7 +367,17 @@ object Reader {
     }
 
     /** Switches voice mid-reading: the current sentence starts again in the new voice. */
+    /** Whether there's a voice to read with (Kokoro installed, or the chosen voice works without it). */
+    fun canSpeak(): Boolean {
+        val v = Voices.byId(Prefs.current.voiceId)
+        return ModelManager.isReady(app) || v.online || (v.engine == VoiceEngine.SUPERTONIC && SupertonicPack.isReady(app))
+    }
+
+    /** Online Gemini voices get a few sentences per request; everything else reads sentence by sentence. */
+    private fun mergeSize(v: Voice) = if (v.engine == VoiceEngine.GEMINI) 420 else 0
+
     fun setVoice(voice: Voice) {
+        VoiceRouter.retry(voice.engine)
         Prefs.update { it.copy(voiceId = voice.id) }
         val s = session ?: return
         if (s.voice.id == voice.id) return
@@ -630,7 +648,7 @@ object Reader {
                 var speech = 1
                 var error: String? = null
                 try {
-                    val samples = KokoroEngine.synth(ctx, text, v, sp)
+                    val samples = VoiceRouter.synth(ctx, text, v, sp)
                     if (samples == null) {
                         error = "The voice pack isn't installed."
                     } else {

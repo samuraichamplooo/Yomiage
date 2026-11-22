@@ -131,6 +131,7 @@ fun MenuContent(
     onHide: () -> Unit,
     onOpen: () -> Unit,
     onView: () -> Unit = {},
+    onLively: () -> Unit = {},
 ) {
     Surface(
         shape = RoundedCornerShape(22.dp),
@@ -143,6 +144,7 @@ fun MenuContent(
             MenuRow(R.drawable.ic_lines, "Read screen", onRead)
             MenuRow(R.drawable.ic_book, "Read in reading view", onView)
             MenuRow(R.drawable.ic_sparkle, "Read simplified", onSimple)
+            MenuRow(R.drawable.ic_sparkle, "Read as a lively narrator", onLively)
             MenuRow(R.drawable.ic_tap, "Tap to start", onTap)
             MenuRow(R.drawable.ic_scan, "Scan text in images", onScan)
             HorizontalDivider(color = Hairline, modifier = Modifier.padding(vertical = 4.dp))

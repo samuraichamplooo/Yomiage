@@ -363,6 +363,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
                 onTap = { service.startTapMode() },
                 onScan = { service.readScreen(ocr = true, simple = false) },
                 onView = { service.readScreen(ocr = false, simple = false, view = true) },
+                onLively = { service.readScreen(ocr = false, simple = false, lively = true) },
                 onHide = {
                     closeMenu()
                     Prefs.update { it.copy(bubbleMode = BubbleMode.OFF) }

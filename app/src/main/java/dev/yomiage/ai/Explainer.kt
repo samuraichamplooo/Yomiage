@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
  */
 object Explainer {
     const val LABEL_SIMPLE = "Simplified"
+    const val LABEL_LIVELY = "Lively"
     const val LABEL_EXPLAIN = "Explanation"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -74,6 +75,19 @@ object Explainer {
             "separated by blank lines. Plain text only: no markdown, no bullet symbols, no headings, no emoji. " +
             "If you're given one part of a longer page, just rewrite that part, with no introduction or wrap-up."
 
+    private fun livelySystem() =
+        "You are a brilliant, engaging narrator who reads textbook pages, articles and websites aloud and makes " +
+            "them fun to listen to, like a favorite teacher or a great podcast host." + audienceLine() + " Retell " +
+            "the text for someone listening: hook them in, keep the energy up, speak naturally and warmly, connect " +
+            "the ideas, and point out what's surprising or cool. Now and then add a quick, relatable example or " +
+            "comparison, but only where it truly helps. Keep every fact, number and key term, with its exact " +
+            "meaning, and say key terms clearly. Never add facts that aren't in the text, and keep the original " +
+            "order. Keep it about as long as the original: retell it, don't summarize it. Skip page clutter such " +
+            "as menus, buttons, page numbers, ads, figure links, copyright lines and highlight labels. Write " +
+            "flowing paragraphs separated by blank lines. Plain text only: no markdown, no bullet symbols, no " +
+            "headings, no emoji. If you're given one part of a longer page, just retell that part, with no " +
+            "introduction or wrap-up."
+
     private fun explainSystem() =
         "You are a patient tutor." + audienceLine() + " Explain the passage the listener just heard: what it " +
             "means in plain words, any hard terms, and why it matters. Use short sentences and at most about 150 " +
@@ -85,9 +99,11 @@ object Explainer {
      * Reads [blocks] rewritten in simple language. If no AI can be reached, [fallback] reads the
      * original instead.
      */
-    fun readSimplified(blocks: List<TextBlock>, fallback: (() -> Unit)? = null) {
+    fun readSimplified(blocks: List<TextBlock>, fallback: (() -> Unit)? = null, lively: Boolean = false) {
         if (!hasKey()) {
-            Reader.showMessage("Add a free AI key or turn on on-device AI in Yomiage to use simple mode.")
+            Reader.showMessage(
+                "Add a free AI key or turn on on-device AI in Yomiage to use ${if (lively) "the lively narrator" else "simple mode"}."
+            )
             return
         }
         // Long pages go in parts: reading starts sooner, and on-device AI has a small input limit.
@@ -110,7 +126,11 @@ object Explainer {
             else "Here is part ${i + 1} of ${sections.size} of the text on my screen:\n\n$sec"
         }
         resume = null
-        start(simplifySystem(), prompts, LABEL_SIMPLE, "Simplifying…", null, fallback)
+        if (lively) {
+            start(livelySystem(), prompts, LABEL_LIVELY, "Getting into it…", null, fallback)
+        } else {
+            start(simplifySystem(), prompts, LABEL_SIMPLE, "Simplifying…", null, fallback)
+        }
     }
 
     /** Explains the paragraph being read, then returns to the next sentence of the page. */

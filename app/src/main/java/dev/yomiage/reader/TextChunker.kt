@@ -128,6 +128,33 @@ object TextChunker {
         return last.lowercase() in abbreviations || initialsRe.matches(last)
     }
 
+    /**
+     * Joins neighbouring sentences of the same paragraph into chunks of up to [max] letters (for
+     * online voices: fewer, longer requests sound more natural and go easier on usage limits).
+     * The first [keepFirst] chunks stay short so reading starts quickly.
+     */
+    fun merge(chunks: List<Chunk>, max: Int, keepFirst: Int = 1): List<Chunk> {
+        if (max <= 0 || chunks.size < 2) return chunks
+        val out = ArrayList<Chunk>(chunks.size)
+        for ((i, c) in chunks.withIndex()) {
+            val last = out.lastOrNull()
+            if (last != null && i > keepFirst && !last.hold && !c.hold && last.block == c.block &&
+                last.text.length + 1 + c.text.length <= max && last.map.size == last.text.length &&
+                c.map.size == c.text.length
+            ) {
+                val text = last.text + " " + c.text
+                val map = IntArray(text.length)
+                last.map.copyInto(map, 0)
+                map[last.text.length] = ((last.map.lastOrNull() ?: 0) + 1).coerceAtMost(c.map.firstOrNull() ?: Int.MAX_VALUE)
+                c.map.copyInto(map, last.text.length + 1)
+                out[out.size - 1] = Chunk(text, c.block, c.gapMs, map)
+            } else {
+                out.add(c)
+            }
+        }
+        return out
+    }
+
     /** Index of the start of the sentence that contains [index]. */
     fun sentenceStart(text: String, index: Int): Int {
         if (index <= 0 || text.isEmpty()) return 0

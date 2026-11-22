@@ -12,9 +12,18 @@ enum class Accent(val label: String, val note: String?) {
     ZH("Mandarin Chinese", "Reads Chinese and English"),
 }
 
+/** Where a voice comes from. */
+enum class VoiceEngine(val label: String) {
+    KOKORO("Kokoro"),         // on the phone, free
+    SUPERTONIC("Supertonic"), // on the phone, free
+    GEMINI("Gemini"),         // online, expressive, uses your Gemini key
+    ORPHEUS("Orpheus"),       // online, expressive, uses your Groq key
+}
+
 /**
- * One Kokoro v1.0 voice. [id] is the speaker id inside voices.bin
- * (see sherpa-onnx scripts/kokoro/v1.0/generate_voices_bin.py).
+ * One voice. For Kokoro, [id] is the speaker id inside voices.bin (see sherpa-onnx
+ * scripts/kokoro/v1.0/generate_voices_bin.py); other engines use their own id ranges
+ * (Supertonic 3000+, Gemini 1000+, Orpheus 2000+). [vibe] is a word or two about how it sounds.
  */
 data class Voice(
     val id: Int,
@@ -22,9 +31,18 @@ data class Voice(
     val accent: Accent,
     val female: Boolean,
     val top: Boolean = false,
+    val engine: VoiceEngine = VoiceEngine.KOKORO,
+    val vibe: String? = null,
+    val display: String? = null,
 ) {
     val name: String =
-        code.substringAfter('_').replaceFirstChar { it.uppercaseChar() }
+        display ?: code.substringAfter('_').replaceFirstChar { it.uppercaseChar() }
+
+    /** The voice's own name at its service ("Puck", "troy"), or the speaker number on the phone. */
+    val remote: String get() = code.substringAfter('_')
+
+    /** Online voices need a connection and a key, and are sent the text being read. */
+    val online: Boolean get() = engine == VoiceEngine.GEMINI || engine == VoiceEngine.ORPHEUS
 
     /** espeak-ng language for this voice, or null for the model default (American English). */
     val lang: String?
@@ -73,5 +91,53 @@ object Voices {
         Voice(i, code, accent, female = code[1] == 'f', top = code in topPicks)
     }
 
-    fun byId(id: Int): Voice = all.getOrNull(id) ?: all[3]
+    /** Supertonic 3: sids 0–4 are F1–F5, 5–9 are M1–M5. */
+    val supertonic: List<Voice> = (0 until 10).map { sid ->
+        val female = sid < 5
+        val n = sid % 5 + 1
+        Voice(
+            3000 + sid, "st_$sid", Accent.US, female, top = sid == 0 || sid == 5,
+            engine = VoiceEngine.SUPERTONIC, display = (if (female) "Sora " else "Kai ") + n,
+            vibe = if (female) "Natural, female" else "Natural, male",
+        )
+    }
+
+    /** Gemini's prebuilt voices and how Google describes each. */
+    val gemini: List<Voice> = listOf(
+        "Puck" to "Upbeat", "Zephyr" to "Bright", "Kore" to "Firm", "Charon" to "Informative",
+        "Fenrir" to "Excitable", "Leda" to "Youthful", "Orus" to "Firm", "Aoede" to "Breezy",
+        "Callirrhoe" to "Easy-going", "Autonoe" to "Bright", "Enceladus" to "Breathy", "Iapetus" to "Clear",
+        "Umbriel" to "Easy-going", "Algieba" to "Smooth", "Despina" to "Smooth", "Erinome" to "Clear",
+        "Algenib" to "Gravelly", "Rasalgethi" to "Informative", "Laomedeia" to "Upbeat", "Achernar" to "Soft",
+        "Alnilam" to "Firm", "Schedar" to "Even", "Gacrux" to "Mature", "Pulcherrima" to "Forward",
+        "Achird" to "Friendly", "Zubenelgenubi" to "Casual", "Vindemiatrix" to "Gentle", "Sadachbia" to "Lively",
+        "Sadaltager" to "Knowledgeable", "Sulafat" to "Warm",
+    ).mapIndexed { i, (name, vibe) ->
+        val female = name in setOf(
+            "Zephyr", "Kore", "Leda", "Aoede", "Callirrhoe", "Autonoe", "Despina", "Erinome", "Laomedeia",
+            "Achernar", "Gacrux", "Pulcherrima", "Vindemiatrix", "Sulafat",
+        )
+        Voice(
+            1000 + i, "gm_$name", Accent.US, female,
+            top = name in setOf("Puck", "Sadachbia", "Laomedeia", "Achird", "Sulafat", "Charon"),
+            engine = VoiceEngine.GEMINI, vibe = vibe,
+        )
+    }
+
+    /** Groq's Orpheus voices (Canopy Labs): very expressive, especially with a delivery set. */
+    val orpheus: List<Voice> = listOf(
+        "autumn" to true, "diana" to true, "hannah" to true, "austin" to false, "daniel" to false, "troy" to false,
+    ).mapIndexed { i, (name, female) ->
+        Voice(
+            2000 + i, "or_$name", Accent.US, female, top = name == "hannah" || name == "troy",
+            engine = VoiceEngine.ORPHEUS, vibe = if (female) "Expressive, female" else "Expressive, male",
+        )
+    }
+
+    private val everyone: Map<Int, Voice> = (all + supertonic + gemini + orpheus).associateBy { it.id }
+
+    fun byId(id: Int): Voice = everyone[id] ?: all[3]
+
+    /** Kokoro's Heart: what reading falls back to when an online voice can't be used. */
+    val fallback: Voice get() = all[3]
 }

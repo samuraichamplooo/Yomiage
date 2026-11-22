@@ -33,12 +33,48 @@ sealed interface ModelStatus {
  * Downloads the Kokoro v1.0 voice pack (all 54 voices, ~330 MB) from the sherpa-onnx
  * model releases once, and unpacks the files the engine needs into the app's storage.
  */
-object ModelManager {
-    private const val TAG = "ModelManager"
-    const val NAME = "kokoro-multi-lang-v1_0"
-    private const val URL_PACK =
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$NAME.tar.bz2"
-    private const val NEEDED_SPACE = 900L * 1024 * 1024
+object ModelManager : ModelPack(
+    name = "kokoro-multi-lang-v1_0",
+    neededSpace = 900L * 1024 * 1024,
+    required = listOf("model.onnx", "voices.bin", "tokens.txt", "espeak-ng-data/phontab"),
+    wanted = { rel ->
+        rel == "model.onnx" || rel == "voices.bin" || rel == "tokens.txt" ||
+            rel == "lexicon-zh.txt" || rel.startsWith("espeak-ng-data/")
+    },
+) {
+    override fun onDelete() = KokoroEngine.release()
+}
+
+/**
+ * Supertonic 3 (Supertone): a fast, natural on-device voice model with 10 voices (~100M
+ * parameters), also from the sherpa-onnx model releases.
+ */
+object SupertonicPack : ModelPack(
+    name = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
+    neededSpace = 500L * 1024 * 1024,
+    required = listOf(
+        "duration_predictor.int8.onnx", "text_encoder.int8.onnx", "vector_estimator.int8.onnx",
+        "vocoder.int8.onnx", "tts.json", "unicode_indexer.bin", "voice.bin",
+    ),
+    wanted = { rel -> !rel.contains('/') && (rel.endsWith(".onnx") || rel.endsWith(".json") || rel.endsWith(".bin")) },
+) {
+    override fun onDelete() = SupertonicEngine.release()
+}
+
+/** One downloadable voice model pack (a .tar.bz2 from the sherpa-onnx releases). */
+abstract class ModelPack(
+    val name: String,
+    private val neededSpace: Long,
+    private val required: List<String>,
+    private val wanted: (String) -> Boolean,
+) {
+    private val TAG = "ModelPack"
+    @Suppress("PropertyName")
+    val NAME get() = name
+    private val URL_PACK get() = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$name.tar.bz2"
+    private val NEEDED_SPACE get() = neededSpace
+
+    protected open fun onDelete() {}
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
@@ -60,7 +96,7 @@ object ModelManager {
         job = scope.launch {
             try {
                 if (app.filesDir.usableSpace < NEEDED_SPACE) {
-                    throw IOException("Not enough free space. The voice pack needs about 900 MB while it unpacks.")
+                    throw IOException("Not enough free space. The voice pack needs about ${NEEDED_SPACE / (1024 * 1024)} MB while it unpacks.")
                 }
                 val tmp = File(app.cacheDir, "$NAME.tar.bz2")
                 var tries = 0
@@ -88,7 +124,7 @@ object ModelManager {
 
     fun delete(context: Context) {
         job?.cancel()
-        KokoroEngine.release()
+        onDelete()
         dir(context).deleteRecursively()
         File(context.cacheDir, "$NAME.tar.bz2").delete()
         _status.value = ModelStatus.Missing
@@ -143,10 +179,6 @@ object ModelManager {
         }
     }
 
-    private fun wanted(rel: String) =
-        rel == "model.onnx" || rel == "voices.bin" || rel == "tokens.txt" ||
-            rel == "lexicon-zh.txt" || rel.startsWith("espeak-ng-data/")
-
     private fun unpack(tmp: File, dest: File) {
         val work = File(dest.parentFile, "$NAME.partial")
         work.deleteRecursively()
@@ -178,8 +210,8 @@ object ModelManager {
                 }
             }
         }
-        for (name in listOf("model.onnx", "voices.bin", "tokens.txt", "espeak-ng-data/phontab")) {
-            if (!File(work, name).exists()) throw IOException("The voice pack is missing $name")
+        for (f in required) {
+            if (!File(work, f).exists()) throw IOException("The voice pack is missing $f")
         }
         dest.deleteRecursively()
         if (!work.renameTo(dest)) throw IOException("Couldn't move the voice pack into place")

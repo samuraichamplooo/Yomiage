@@ -38,6 +38,8 @@ data class Settings(
     val theme: Int = 0,                 // ThemeKind: classic, Material You or liquid glass
     val skipSmall: Int = 3,             // seconds for the small skip buttons
     val skipBig: Int = 5,               // seconds for the big skip buttons (and next/previous)
+    val delivery: Int = 0,              // how online voices read: teacher, storyteller, upbeat, calm
+    val alwaysLively: Boolean = false,  // read the screen as a lively narrator (AI retelling)
 )
 
 object HighlightMode {
@@ -112,6 +114,8 @@ object Prefs {
             theme = sp.getInt("theme", d.theme),
             skipSmall = sp.getInt("skipSmall", d.skipSmall),
             skipBig = sp.getInt("skipBig", d.skipBig),
+            delivery = sp.getInt("delivery", d.delivery),
+            alwaysLively = sp.getBoolean("alwaysLively", d.alwaysLively),
         )
     }
 
@@ -151,6 +155,8 @@ object Prefs {
             .putInt("theme", s.theme)
             .putInt("skipSmall", s.skipSmall)
             .putInt("skipBig", s.skipBig)
+            .putInt("delivery", s.delivery)
+            .putBoolean("alwaysLively", s.alwaysLively)
             .apply()
     }
 }
