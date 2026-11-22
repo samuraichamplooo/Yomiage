@@ -1091,9 +1091,9 @@ private fun VoiceSection(settings: YSettings, modelReady: Boolean) {
                         "with billing on, it's roughly \$0.55–\$0.80 per hour of listening. When the limit's reached, " +
                         "Heart reads instead. The text is sent to Google."
                     VoiceEngine.ORPHEUS -> "Online and the most expressive: 6 voices that can sound cheerful, dramatic " +
-                        "or excited (pick a delivery below). Uses your Groq key. The free allowance is a few minutes a " +
-                        "day; paid, it's about \$1.20 per hour of listening. Groq may ask you to accept the model's terms " +
-                        "once at console.groq.com. The text is sent to Groq."
+                        "or excited (pick a delivery below). Uses your Groq key. Free only, for now: a few minutes a day, " +
+                        "because Groq has paused paid upgrades. Groq may ask you to accept the model's terms once at " +
+                        "console.groq.com. The text is sent to Groq."
                 },
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
@@ -1115,8 +1115,10 @@ private fun VoiceSection(settings: YSettings, modelReady: Boolean) {
                             "next to the project; Google asks for at least \$5 of prepaid credit). Your same key keeps " +
                             "working, with much higher limits."
                     } else {
-                        "Upgrade your Groq account to the pay-as-you-go Developer plan. Your same key keeps working, " +
-                            "with much higher limits. You can set a monthly spending limit too."
+                        "Groq has paused upgrades to its paid Developer plan for now (there's no waiting list, and no " +
+                            "way to add credits on the free plan). If Plans ever shows an Upgrade button, your same key " +
+                            "keeps working with much higher limits. Until then, for expressive reading past the free " +
+                            "minutes, use Gemini voices with billing on, or Supertonic for free on the phone."
                     } + " Then pick a voice again to switch back to it right away.",
                     color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
                 )
@@ -1125,10 +1127,10 @@ private fun VoiceSection(settings: YSettings, modelReady: Boolean) {
                     if (engine == VoiceEngine.GEMINI) {
                         StepButton("Set up billing") { openUrl(context, "https://aistudio.google.com/apikey") }
                     } else {
-                        StepButton("Upgrade plan") { openUrl(context, "https://console.groq.com/settings/billing/plans") }
-                        StepButton("Spending limit", outlined = true) {
-                            openUrl(context, "https://console.groq.com/settings/billing/limits")
+                        StepButton("Check Groq plans", outlined = true) {
+                            openUrl(context, "https://console.groq.com/settings/billing/plans")
                         }
+                        StepButton("Try Gemini voices") { tab = VoiceEngine.GEMINI.ordinal }
                     }
                 }
                 Spacer(Modifier.height(10.dp))

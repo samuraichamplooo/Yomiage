@@ -120,7 +120,11 @@ object VoiceRouter {
                             toast(
                                 context,
                                 "${engine.label} voice: ${e.message} Reading with Heart for now." +
-                                    if (e.limit) " Billing options are in Yomiage's Voice settings." else "",
+                                    if (!e.limit) "" else if (engine == VoiceEngine.ORPHEUS) {
+                                        " Groq's free minutes are used up for today; Gemini voices or Supertonic can take over."
+                                    } else {
+                                        " Billing options are in Yomiage's Voice settings."
+                                    },
                             )
                         }
                     }
