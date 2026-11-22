@@ -1024,6 +1024,13 @@ private fun PlayerSection(context: Context, settings: YSettings) {
             }
         }
         Divider()
+        SwitchRow(
+            "Show the words on the player",
+            "The line being read, with the word highlighted. Off keeps the player small: just the buttons. " +
+                "The text button at the top of the player switches it too.",
+            settings.playerText,
+        ) { on -> Prefs.update { it.copy(playerText = on) } }
+        Divider()
         Column(Modifier.padding(16.dp)) {
             Text("Quick panel, lock screen and Always On Display", color = PaperWhite, fontSize = 15.sp)
             Text(

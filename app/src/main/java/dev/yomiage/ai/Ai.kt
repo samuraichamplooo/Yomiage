@@ -113,7 +113,7 @@ object Ai {
                 Gemini.stream(
                     Prefs.current.geminiKey, system, user, cancelled,
                     // Don't wait long on a busy Gemini when there's something else to try.
-                    timeBudgetMs = if (hasBackup) 20_000 else 50_000,
+                    timeBudgetMs = if (hasBackup) 12_000 else 50_000,
                     onStatus = onStatus, image = image?.jpeg, onText = onText,
                 )
             }

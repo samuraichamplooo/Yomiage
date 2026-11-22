@@ -187,10 +187,10 @@ object Explainer {
         resume = back
         job = scope.launch {
             var got = false
+            var paragraphs: Paragraphs? = null
             try {
-                val paragraphs = Paragraphs { p ->
-                    if (Reader.append(id, listOf(TextBlock(p)), done = false)) got = true
-                }
+                val streamer = Paragraphs(id) { got = true }
+                paragraphs = streamer
                 for (prompt in prompts) {
                     if (Reader.state.value.session != id) break
                     Ai.stream(
@@ -198,9 +198,9 @@ object Explainer {
                         cancelled = { !isActive || Reader.state.value.session != id },
                         onStatus = { msg -> if (!got) Reader.setWaiting(id, msg) },
                     ) {
-                        paragraphs.add(it)
+                        streamer.add(it)
                     }
-                    paragraphs.flush()
+                    streamer.finish()
                 }
                 Reader.append(id, emptyList(), done = true)
                 if (!got && Reader.state.value.session == id) Reader.showMessage("The AI didn't send anything back. Try again.")
@@ -208,6 +208,7 @@ object Explainer {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 if (Reader.state.value.session != id) return@launch
                 if (got) {
+                    paragraphs?.finish()
                     Reader.append(id, emptyList(), done = true)
                     return@launch
                 }
@@ -231,55 +232,54 @@ object Explainer {
         }
     }
 
-    /** Collects streamed text and hands out whole paragraphs (or long runs of sentences) to be read. */
-    private class Paragraphs(private val emit: (String) -> Unit) {
-        private val buf = StringBuilder()
+    /**
+     * Feeds streamed text into the reading as it's written: each finished sentence can be read
+     * right away, and a new line starts a new paragraph. [onFirst] runs once something will be read.
+     */
+    private class Paragraphs(private val id: Long, private val onFirst: () -> Unit) {
+        private val para = StringBuilder()   // the paragraph being written
+        private var block = -1
+        private var told = false
 
         fun add(t: String) {
-            buf.append(t)
-            drain(false)
-        }
-
-        fun flush() = drain(true)
-
-        private fun drain(all: Boolean) {
+            var rest = t
             while (true) {
-                val nl = buf.indexOf("\n")
-                if (nl >= 0) {
-                    val p = clean(buf.substring(0, nl))
-                    buf.delete(0, nl + 1)
-                    if (p.isNotEmpty()) emit(p)
-                    continue
+                val nl = rest.indexOf('\n')
+                if (nl < 0) {
+                    para.append(rest)
+                    feed(false)
+                    return
                 }
-                if (!all && buf.length > 420) {
-                    val cut = lastSentenceEnd(buf)
-                    if (cut > 0) {
-                        val p = clean(buf.substring(0, cut))
-                        buf.delete(0, cut)
-                        if (p.isNotEmpty()) emit(p)
-                        continue
-                    }
-                }
-                break
-            }
-            if (all) {
-                val p = clean(buf.toString())
-                buf.setLength(0)
-                if (p.isNotEmpty()) emit(p)
+                para.append(rest, 0, nl)
+                finish()
+                rest = rest.substring(nl + 1)
             }
         }
 
-        private fun lastSentenceEnd(sb: StringBuilder): Int {
-            for (i in sb.length - 2 downTo 120) {
-                val c = sb[i]
-                if ((c == '.' || c == '!' || c == '?') && sb[i + 1] == ' ') return i + 1
-            }
-            return -1
+        /** The paragraph being written is complete (or the answer ended). */
+        fun finish() {
+            feed(true)
+            para.setLength(0)
+            block = -1
         }
 
+        private fun feed(done: Boolean) {
+            val text = clean(para.toString())
+            if (text.isBlank()) return
+            if (block < 0) {
+                block = Reader.beginStream(id)
+                if (block < 0) return
+            }
+            if (Reader.feedHold(id, block, text, done) && !told) {
+                told = true
+                onFirst()
+            }
+        }
+
+        // Only ever removes things, the same way as the text grows, so what's been read stays put.
         private fun clean(s: String): String =
-            s.replace("**", "").replace("__", "").replace("`", "")
-                .replace(Regex("^\\s*(#+|[-*•]|\\d+[.)])\\s+"), "")
-                .trim()
+            s.replace("*", "").replace("`", "").replace("#", "")
+                .replace(Regex("^\\s*([-•]|\\d+[.)])\\s+"), "")
+                .trimStart()
     }
 }

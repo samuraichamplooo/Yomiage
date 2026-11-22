@@ -216,6 +216,29 @@ object Reader {
     }
 
     /**
+     * Starts a paragraph that an AI is still writing (Explain this, Simplify, the lively narrator):
+     * reading waits there, without a time limit, while [feedHold] fills it in sentence by sentence.
+     * Returns its block number, or -1 if that session is no longer the current one.
+     */
+    fun beginStream(id: Long): Int {
+        val s = session ?: return -1
+        if (s.id != id) return -1
+        var b = -1
+        s.withLock {
+            b = s.blocks.size
+            s.blocks = s.blocks + TextBlock(" ", null, BlockKind.TEXT, hold = true)
+            s.streams.add(b)
+            s.chunks.add(Chunk("…", b, 0, IntArray(1), hold = true))
+            s.audio.add(null)
+            s.lengths.add(-1)
+            s.speechLen.add(1)
+            s.publishLocked()
+        }
+        _revision.value++
+        return b
+    }
+
+    /**
      * Puts the explanation of a figure or table ([block]) into the reading while it's being written:
      * each finished sentence can be read as soon as it arrives. [text] is everything written so far;
      * [done] once it's complete. If reading already went past the figure (it only waits so long),
@@ -236,7 +259,9 @@ object Reader {
             val i = (0 until s.n).firstOrNull { s.chunks[it].hold && s.chunks[it].block == block }
             if (i != null) {
                 if (!done && upTo <= from) return@withLock
-                val pieces = if (upTo > from) explainedChunksLocked(s, block, full, from, upTo, last = done) else emptyList()
+                // Reading is waiting right here: make the first bit short so the voice starts sooner.
+                val ramp = if (s.wChunk == i) 0 else 10
+                val pieces = if (upTo > from) explainedChunksLocked(s, block, full, from, upTo, last = done, ramp = ramp) else emptyList()
                 s.fed[block] = max(from, upTo)
                 // Until it's finished, a placeholder stays after what's ready, for the rest.
                 val rest = if (done) emptyList() else listOf(Chunk(name, block, 0, IntArray(name.length), hold = true))
@@ -279,12 +304,16 @@ object Reader {
     }
 
     /** Chunks for [full] from [from] to [upTo], positioned within the explanation's whole text. */
-    private fun explainedChunksLocked(s: Session, block: Int, full: String, from: Int, upTo: Int, last: Boolean): List<Chunk> {
+    private fun explainedChunksLocked(
+        s: Session, block: Int, full: String, from: Int, upTo: Int, last: Boolean, ramp: Int = 10,
+    ): List<Chunk> {
         val old = s.blocks.getOrNull(block)
-        val nb = TextBlock(full.substring(0, upTo), old?.bounds, BlockKind.EXPLAINED)
+        // A stream is ordinary reading; a figure's or table's is shown as "Explained simply".
+        val kind = if (block in s.streams) BlockKind.TEXT else BlockKind.EXPLAINED
+        val nb = TextBlock(full.substring(0, upTo), old?.bounds, kind)
         s.blocks = s.blocks.toMutableList().also { if (block < it.size) it[block] = nb }
-        val part = TextBlock(full.substring(from, upTo), old?.bounds, BlockKind.EXPLAINED)
-        val built = TextChunker.build(listOf(part), 0, 0, Prefs.current.readUrls, rampFrom = 10)
+        val part = TextBlock(full.substring(from, upTo), old?.bounds, kind)
+        val built = TextChunker.build(listOf(part), 0, 0, Prefs.current.readUrls, rampFrom = ramp)
         return built.mapIndexed { k, c ->
             // Between pieces of one explanation, just a sentence's pause.
             val gap = if (!last && k == built.size - 1) TextChunker.GAP_SENTENCE else c.gapMs
@@ -571,6 +600,7 @@ object Reader {
         // Figure and table explanations coming in: how much of each is in the chunks, and its name.
         val fed = HashMap<Int, Int>()
         val holdNames = HashMap<Int, String>()
+        val streams = HashSet<Int>()   // paragraphs an AI is writing: no time limit on waiting
         var label: String? = null
         var waiting: String? = null
         val lock = ReentrantLock()
@@ -1012,7 +1042,7 @@ object Reader {
                         }
 
                         val a = audio[wChunk]
-                        if (a == null && chunks[wChunk].hold) {
+                        if (a == null && chunks[wChunk].hold && chunks[wChunk].block !in streams) {
                             // A figure still being explained: wait a while, then move on without it.
                             val now = SystemClock.elapsedRealtime()
                             if (holdIndex != wChunk) {
@@ -1099,6 +1129,7 @@ object Reader {
             val chunk = chunks.getOrNull(idx)
             val caption = when {
                 n == 0 -> waiting ?: "Getting ready…"
+                chunk != null && chunk.hold && chunk.block in streams -> waiting ?: "Writing…"
                 chunk != null && chunk.hold -> "Looking at ${chunk.text}…"
                 status == Status.Preparing && loadingModel -> "Warming up the voice…"
                 status == Status.Preparing -> chunk?.text ?: ""

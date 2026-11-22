@@ -41,6 +41,9 @@ object Gemini {
         data class Quota(val detail: String) : Result  // this model's free quota is used up: next model
     }
 
+    /** The thinking level each model accepted ("" for none), so a refused one isn't asked for again. */
+    private val levels = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     /** The model that answered last, for the key test. */
     @Volatile
     var lastModel: String = ""
@@ -69,23 +72,28 @@ object Gemini {
         var quota = 0
         var lastDetail = ""
         for ((mi, model) in order.withIndex()) {
-            var thinking = true
+            // As little thinking as the model allows, so it starts writing sooner (remembered per model).
+            var level: String? = levels[model]?.ifEmpty { null } ?: if (levels.containsKey(model)) null else "minimal"
             var tries = 0
             while (tries < 3) {
                 if (cancelled()) return
                 if (SystemClock.elapsedRealtime() > deadline) break
                 tries++
-                val r = attempt(key.trim(), model, thinking, system, user, image, cancelled, onText)
+                val r = attempt(key.trim(), model, level, system, user, image, cancelled, onText)
                 when (r) {
                     Result.Ok -> {
+                        levels[model] = level ?: ""
                         lastModel = model
                         if (model != saved) Prefs.update { it.copy(geminiModel = model) }
                         return
                     }
                     Result.NotFound -> break
                     Result.BadConfig -> {
-                        if (!thinking) break
-                        thinking = false
+                        level = when (level) {
+                            "minimal" -> "low"
+                            "low" -> null
+                            else -> break
+                        }
                     }
                     is Result.Quota -> {
                         quota++
@@ -118,7 +126,7 @@ object Gemini {
     private fun attempt(
         key: String,
         model: String,
-        thinking: Boolean,
+        thinking: String?,
         system: String,
         user: String,
         image: ByteArray?,
@@ -142,7 +150,7 @@ object Gemini {
             .put(
                 "generationConfig",
                 JSONObject().put("temperature", 0.4).put("maxOutputTokens", 4096).apply {
-                    if (thinking) put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+                    if (thinking != null) put("thinkingConfig", JSONObject().put("thinkingLevel", thinking))
                 },
             )
         var conn: HttpURLConnection? = null
@@ -175,7 +183,7 @@ object Gemini {
                     code == 404 -> Result.NotFound
                     code == 400 && msg.contains("API key", true) ->
                         throw GeminiException("Your Gemini API key didn't work. Copy it again from Google AI Studio. ($detail)")
-                    code == 400 && thinking -> Result.BadConfig
+                    code == 400 && thinking != null -> Result.BadConfig
                     code == 401 || code == 403 ->
                         throw GeminiException("Your Gemini API key was rejected. Copy it again from Google AI Studio. ($detail)")
                     code == 429 -> Result.Quota(detail)
@@ -223,9 +231,8 @@ object Gemini {
             if (gotText) return Result.Ok
             Log.w(TAG, "connection problem with $model", e)
             return Result.Busy(e.javaClass.simpleName)
-        } finally {
-            conn?.disconnect()
         }
+        // No disconnect(): the connection is kept for the next request, which then starts faster.
     }
 
     /** A tiny request to check that a key works. Returns the model that answered. */

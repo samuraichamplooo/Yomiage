@@ -221,6 +221,7 @@ fun PlayerBar(
 ) {
     var showSpeed by remember { mutableStateOf(false) }
     val last = remember { FloatArray(2) }
+    val prefs by Prefs.settings.collectAsState()
     Surface(
         shape = RoundedCornerShape(26.dp),
         color = Look.panel(0.96f),
@@ -245,6 +246,7 @@ fun PlayerBar(
                         Icon(painterResource(R.drawable.ic_dot), "Shrink to a dot", tint = Vermilion, modifier = Modifier.size(17.dp))
                     }
                 } ?: Spacer(Modifier.width(30.dp))
+                Spacer(Modifier.width(30.dp))   // balances the text button, so the handle stays centred
                 Box(
                     Modifier
                         .weight(1f)
@@ -257,6 +259,20 @@ fun PlayerBar(
                             .size(width = 36.dp, height = 4.dp)
                             .clip(RoundedCornerShape(2.dp))
                             .background(wash(0.25f))
+                    )
+                }
+                // Show or hide the words being read (remembered).
+                Box(
+                    Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .clickable { Prefs.update { it.copy(playerText = !it.playerText) } },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painterResource(if (prefs.playerText) R.drawable.ic_caption else R.drawable.ic_caption_off),
+                        if (prefs.playerText) "Hide the text" else "Show the text",
+                        tint = Muted, modifier = Modifier.size(17.dp),
                     )
                 }
                 actions.onHide?.let { hide ->
@@ -301,22 +317,28 @@ fun PlayerBar(
                 TextPanel(state, progress)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val caption = when {
-                    state.status == Status.Error -> AnnotatedString(state.message ?: "Something went wrong.")
-                    state.status == Status.Finished -> AnnotatedString("Done. Press play to hear it again.")
-                    else -> karaoke(state, progress)
+                val message = state.status == Status.Error || state.status == Status.Finished
+                if (prefs.playerText || message) {
+                    val caption = when {
+                        state.status == Status.Error -> AnnotatedString(state.message ?: "Something went wrong.")
+                        state.status == Status.Finished -> AnnotatedString("Done. Press play to hear it again.")
+                        else -> karaoke(state, progress)
+                    }
+                    Text(
+                        caption,
+                        color = if (state.status == Status.Error) Muted else Paper,
+                        fontSize = 14.sp,
+                        lineHeight = 19.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 8.dp),
+                    )
+                } else {
+                    // Text hidden: just the buttons, on the right.
+                    Spacer(Modifier.weight(1f).height(36.dp))
                 }
-                Text(
-                    caption,
-                    color = if (state.status == Status.Error) Muted else Paper,
-                    fontSize = 14.sp,
-                    lineHeight = 19.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 8.dp),
-                )
                 if (state.status != Status.Error) {
                     actions.onReadingView?.let { SmallIcon(R.drawable.ic_book, "Open in reading view", it) }
                     actions.onLively?.let {
@@ -354,9 +376,8 @@ fun PlayerBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    val skips by Prefs.settings.collectAsState()
-                    val big = skips.skipBig
-                    val small = skips.skipSmall
+                    val big = prefs.skipBig
+                    val small = prefs.skipSmall
                     SeekButton(R.drawable.ic_rewind, "$big", "Back $big seconds") { actions.onSeek(-big.toFloat()) }
                     SeekButton(R.drawable.ic_rewind, "$small", "Back $small seconds") { actions.onSeek(-small.toFloat()) }
                     PlayButton(state.status, actions.onPlayPause)

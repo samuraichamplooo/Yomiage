@@ -38,6 +38,7 @@ data class Settings(
     val openView: Boolean = false,      // open the reading view whenever a page starts reading
     val viewTextSp: Int = 19,           // text size in the reading view
     val theme: Int = 0,                 // ThemeKind: classic, Material You or liquid glass
+    val playerText: Boolean = true,     // show the words being read on the player
     val skipSmall: Int = 3,             // seconds for the small skip buttons
     val skipBig: Int = 5,               // seconds for the big skip buttons (and next/previous)
     val delivery: Int = 0,              // how online voices read: teacher, storyteller, upbeat, calm
@@ -111,6 +112,7 @@ object Prefs {
             claudeModel = sp.getString("claudeModel", d.claudeModel) ?: d.claudeModel,
             useOnDevice = sp.getBoolean("useOnDevice", d.useOnDevice),
             followScroll = sp.getBoolean("followScroll", d.followScroll),
+            playerText = sp.getBoolean("playerText", d.playerText),
             smartPage = sp.getBoolean("smartPage", d.smartPage),
             explainVisuals = sp.getBoolean("explainVisuals", d.explainVisuals),
             openView = sp.getBoolean("openView", d.openView),
@@ -154,6 +156,7 @@ object Prefs {
             .putString("claudeModel", s.claudeModel)
             .putBoolean("useOnDevice", s.useOnDevice)
             .putBoolean("followScroll", s.followScroll)
+            .putBoolean("playerText", s.playerText)
             .putBoolean("smartPage", s.smartPage)
             .putBoolean("explainVisuals", s.explainVisuals)
             .putBoolean("openView", s.openView)

@@ -22,7 +22,8 @@ object Groq {
         "llama-3.3-70b-versatile",
         "meta-llama/llama-4-maverick-17b-128e-instruct",
         "meta-llama/llama-4-scout-17b-16e-instruct",
-        "openai/gpt-oss-120b",
+        "openai/gpt-oss-120b",      // with low reasoning it starts quickly
+        "qwen/qwen3.8-27b",         // reasoning turned off
         "openai/gpt-oss-20b",
         "llama-3.1-8b-instant",
     )
@@ -51,6 +52,7 @@ object Groq {
         data object Ok : Result
         data object NotFound : Result
         data class Busy(val detail: String) : Result
+        data object Plainer : Result   // didn't take the quick settings: ask again without them
     }
 
     fun stream(
@@ -73,12 +75,14 @@ object Groq {
         var detail = ""
         for (model in order.take(4)) {
             if (cancelled()) return
-            when (val r = attempt(key.trim(), model, system, user, image, cancelled, onText)) {
+            var r = attempt(key.trim(), model, system, user, image, cancelled, onText, quick = true)
+            if (r is Result.Plainer) r = attempt(key.trim(), model, system, user, image, cancelled, onText, quick = false)
+            when (r) {
                 Result.Ok -> {
                     lastModel = model
                     return
                 }
-                Result.NotFound -> continue
+                Result.NotFound, Result.Plainer -> continue
                 is Result.Busy -> detail = r.detail
             }
         }
@@ -124,6 +128,8 @@ object Groq {
         image: ByteArray?,
         cancelled: () -> Boolean,
         onText: (String) -> Unit,
+        /** Little or no reasoning before answering (the models that reason), so it starts sooner. */
+        quick: Boolean,
     ): Result {
         val content: Any = if (image == null) {
             user
@@ -148,6 +154,13 @@ object Groq {
             .put("temperature", 0.4)
             .put("max_tokens", 2048)
             .put("stream", true)
+        if (quick) {
+            val m = model.lowercase()
+            when {
+                "gpt-oss" in m -> body.put("reasoning_effort", "low").put("include_reasoning", false)
+                "qwen3" in m -> body.put("reasoning_effort", "none")
+            }
+        }
         var conn: HttpURLConnection? = null
         var got = false
         try {
@@ -174,6 +187,7 @@ object Groq {
                     ""
                 }
                 return when {
+                    code == 400 && quick && msg.contains("reasoning", true) -> Result.Plainer
                     code == 401 || code == 403 -> throw AiException("Your Groq key was rejected. Copy it again from console.groq.com.")
                     code == 404 || msg.contains("decommissioned", true) || msg.contains("does not exist", true) -> Result.NotFound
                     else -> Result.Busy("$code: ${msg.take(120)}")
@@ -233,8 +247,7 @@ object Groq {
             return if (got) Result.Ok else Result.Busy("timed out")
         } catch (e: IOException) {
             return if (got) Result.Ok else Result.Busy(e.javaClass.simpleName)
-        } finally {
-            conn?.disconnect()
         }
+        // No disconnect(): the connection is kept for the next request, which then starts faster.
     }
 }

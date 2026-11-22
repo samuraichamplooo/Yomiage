@@ -47,13 +47,17 @@ object Claude {
         var detail = ""
         for (model in order) {
             if (cancelled()) return
-            when (val r = attempt(key.trim(), model, system, user, image, cancelled, onText)) {
+            var r = attempt(key.trim(), model, system, user, image, cancelled, onText, quick = true)
+            // If this model won't take the quick setting, ask it the ordinary way.
+            if (r is Result.Plainer) r = attempt(key.trim(), model, system, user, image, cancelled, onText, quick = false)
+            when (r) {
                 Result.Ok -> {
                     lastModel = model
                     return
                 }
                 is Result.TryNext -> detail = r.why
                 is Result.Fail -> throw AiException(r.why)
+                Result.Plainer -> detail = "$model didn't accept the request"
             }
         }
         throw AiException("Claude couldn't answer: $detail")
@@ -63,6 +67,7 @@ object Claude {
         data object Ok : Result
         data class TryNext(val why: String) : Result
         data class Fail(val why: String) : Result
+        data object Plainer : Result
     }
 
     private fun attempt(
@@ -73,6 +78,8 @@ object Claude {
         image: ByteArray?,
         cancelled: () -> Boolean,
         onText: (String) -> Unit,
+        /** Low effort: little or no thinking before it starts writing, so the voice starts sooner. */
+        quick: Boolean,
     ): Result {
         val content = JSONArray()
         if (image != null) {
@@ -92,6 +99,7 @@ object Claude {
             .put("system", system)
             .put("stream", true)
             .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", content)))
+        if (quick) body.put("output_config", JSONObject().put("effort", "low"))
 
         val conn = (URL(URL_MESSAGES).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -115,6 +123,7 @@ object Claude {
                     null
                 }.orEmpty()
                 return when {
+                    code == 400 && quick && (msg.contains("effort", true) || msg.contains("output_config", true)) -> Result.Plainer
                     code == 401 -> Result.Fail("Claude refused the key. Check it in the Claude Console.")
                     code == 403 -> Result.Fail("This Claude key isn't allowed to do that. $msg".trim())
                     msg.contains("credit balance", ignoreCase = true) ->
@@ -162,8 +171,7 @@ object Claude {
             return if (produced) Result.Ok else Result.Fail("Claude took too long to answer.")
         } catch (e: IOException) {
             return if (produced) Result.Ok else Result.Fail("Couldn't reach Claude (${e.javaClass.simpleName}).")
-        } finally {
-            conn.disconnect()
         }
+        // No disconnect(): the connection is kept for the next request, which then starts faster.
     }
 }
