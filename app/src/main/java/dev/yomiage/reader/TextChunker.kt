@@ -63,7 +63,7 @@ object TextChunker {
      * Cleans text for speech (links read as "link", emoji dropped, spaces collapsed) while keeping
      * track of where each spoken character came from.
      */
-    private fun normalize(raw: String, readUrls: Boolean): Mapped {
+    private fun normalize(raw: String, readUrls: Boolean, marks: HighlightMarks.State = HighlightMarks.State()): Mapped {
         val sb = StringBuilder(raw.length)
         val map = IntArray(raw.length + 8)
         var len = 0
@@ -75,16 +75,29 @@ object TextChunker {
             sb.setLength(sb.length - 1)
             len--
         }
-        val urls = if (readUrls) emptyList() else urlRe.findAll(raw).map { it.range }.toList()
+        // Pieces said differently: web addresses ("link"), and screen-reader highlight labels
+        // ("Yellow highlight:" once where a highlight begins, nothing for the rest).
+        val swaps = ArrayList<Pair<IntRange, String>>()
+        if (!readUrls) urlRe.findAll(raw).forEach { swaps.add(it.range to "link") }
+        swaps.addAll(HighlightMarks.replacements(raw, marks))
+        swaps.sortBy { it.first.first }
         var ui = 0
         var lastSpace = true
         var i = 0
         while (i < raw.length) {
-            if (ui < urls.size && i == urls[ui].first) {
-                if (!lastSpace) emit(' ', i)
-                for (ch in "link") emit(ch, i)
-                lastSpace = false
-                i = urls[ui].last + 1
+            while (ui < swaps.size && swaps[ui].first.first < i) ui++   // overlapping: skip
+            if (ui < swaps.size && i == swaps[ui].first.first) {
+                val (range, say) = swaps[ui]
+                if (say.isNotEmpty()) {
+                    if (!lastSpace) emit(' ', i)
+                    for (ch in say) emit(ch, i)
+                    emit(' ', i)
+                    lastSpace = true
+                } else if (!lastSpace) {
+                    emit(' ', i)   // keep the words on either side apart
+                    lastSpace = true
+                }
+                i = range.last + 1
                 ui++
                 continue
             }
@@ -143,13 +156,14 @@ object TextChunker {
     ): List<Chunk> {
         val out = ArrayList<Chunk>()
         val bi = BreakIterator.getSentenceInstance(Locale.getDefault())
+        val marks = HighlightMarks.State()
         for (b in startBlock.coerceAtLeast(0) until blocks.size) {
             if (blocks[b].hold) {
                 val t = blocks[b].text.ifBlank { "Figure" }
                 out.add(Chunk(t, b, GAP_BLOCK, IntArray(t.length) { it }, hold = true))
                 continue
             }
-            val full = normalize(blocks[b].text, readUrls)
+            val full = normalize(blocks[b].text, readUrls, marks)
             var text = full.text
             var map = full.map
             if (b == startBlock && startChar > 0) {

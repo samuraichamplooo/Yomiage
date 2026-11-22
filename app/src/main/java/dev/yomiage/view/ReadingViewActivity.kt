@@ -58,6 +58,7 @@ import dev.yomiage.data.Prefs
 import dev.yomiage.overlay.PlayerActions
 import dev.yomiage.overlay.PlayerBar
 import dev.yomiage.reader.BlockKind
+import dev.yomiage.reader.HighlightMarks
 import dev.yomiage.reader.Chunk
 import dev.yomiage.reader.Progress
 import dev.yomiage.reader.Reader
@@ -304,25 +305,77 @@ private fun Paragraph(p: Para, size: Int, mode: Int, chunk: Chunk?, progress: Pr
     }
 }
 
-/** The paragraph with the sentence being read shaded and/or the word being said marked (your highlight setting). */
-private fun highlighted(text: String, chunk: Chunk?, progress: Progress?, mode: Int): AnnotatedString {
-    if (chunk == null || chunk.hold || chunk.map.isEmpty() || mode == HighlightMode.OFF) return AnnotatedString(text)
-    val s = chunk.map.first().coerceIn(0, text.length)
-    val e = (chunk.map.last() + 1).coerceIn(s, text.length)
+/** A paragraph as shown: the site's hidden highlight labels taken out, its highlights kept. */
+private class Shown(val text: String, val at: IntArray, val marked: List<IntRange>)
+
+private fun shown(text: String): Shown {
+    val marks = HighlightMarks.find(text)
+    val sb = StringBuilder(text.length)
+    val at = IntArray(text.length + 1)
+    val marked = ArrayList<IntRange>()
+    var from = -1
+    fun copy(a: Int, b: Int) {
+        for (i in a until b) {
+            val c = text[i]
+            // Where a label came out, don't leave a double space behind.
+            if (c.isWhitespace() && (sb.isEmpty() || sb.last().isWhitespace())) {
+                at[i] = sb.length
+                continue
+            }
+            at[i] = sb.length
+            sb.append(c)
+        }
+    }
+    var pos = 0
+    for (m in marks) {
+        copy(pos, m.range.first)
+        for (i in m.range) at[i] = sb.length
+        if (m.start) {
+            if (from < 0) from = sb.length
+        } else {
+            if (from >= 0 && sb.length > from) marked.add(from until sb.length)
+            from = -1
+        }
+        pos = m.range.last + 1
+    }
+    copy(pos, text.length)
+    at[text.length] = sb.length
+    if (from >= 0 && sb.length > from) marked.add(from until sb.length)
+    return Shown(sb.toString(), at, marked)
+}
+
+private val PageHighlight = Color(0x45F2C230)
+
+/**
+ * The paragraph with the page's own highlights tinted, and the sentence being read shaded and/or
+ * the word being said marked (your highlight setting).
+ */
+private fun highlighted(raw: String, chunk: Chunk?, progress: Progress?, mode: Int): AnnotatedString {
+    val v = shown(raw)
+    val text = v.text
+    fun to(i: Int) = v.at[i.coerceIn(0, raw.length)]
     return buildAnnotatedString {
         append(text)
+        for (r in v.marked) addStyle(SpanStyle(background = PageHighlight), r.first, r.last + 1)
+        if (chunk == null || chunk.hold || chunk.map.isEmpty() || mode == HighlightMode.OFF) return@buildAnnotatedString
+        val s = to(chunk.map.first()).coerceIn(0, text.length)
+        val e = to(chunk.map.last() + 1).coerceIn(s, text.length)
         if (HighlightMode.sentence(mode)) addStyle(SpanStyle(background = Sentence), s, e)
         if (HighlightMode.word(mode) && progress != null && progress.wordStart >= 0 && progress.wordEnd > progress.wordStart) {
-            val ws = chunk.map.getOrNull(progress.wordStart)
-            val we = chunk.map.getOrNull(progress.wordEnd - 1)
-            if (ws != null && we != null && ws in 0 until text.length && we + 1 in ws..text.length) {
-                addStyle(
-                    SpanStyle(
-                        background = Word, textDecoration = TextDecoration.Underline,
-                        fontWeight = FontWeight.SemiBold, color = Paper,
-                    ),
-                    ws, we + 1,
-                )
+            val ws0 = chunk.map.getOrNull(progress.wordStart)
+            val we0 = chunk.map.getOrNull(progress.wordEnd - 1)
+            if (ws0 != null && we0 != null && ws0 in raw.indices && we0 in raw.indices && we0 >= ws0) {
+                val ws = to(ws0)
+                val we = to(we0 + 1).coerceAtLeast(ws + 1).coerceAtMost(text.length)
+                if (ws < we) {
+                    addStyle(
+                        SpanStyle(
+                            background = Word, textDecoration = TextDecoration.Underline,
+                            fontWeight = FontWeight.SemiBold, color = Paper,
+                        ),
+                        ws, we,
+                    )
+                }
             }
         }
     }
