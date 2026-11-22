@@ -219,6 +219,7 @@ private fun ReadingScreen(onBack: () -> Unit) {
                         },
                         onOpenApp = onBack,
                         onExplain = { ReaderService.instance?.explainCurrent() },
+                        onLively = { ReaderService.instance?.toggleLively() },
                         onBackToPage = { Explainer.backToPage() },
                     ),
                 )

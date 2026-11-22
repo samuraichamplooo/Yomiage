@@ -180,6 +180,8 @@ class PlayerActions(
     val onExplain: (() -> Unit)? = null,
     /** Opens the text in Yomiage's reading view. */
     val onReadingView: (() -> Unit)? = null,
+    /** Switches to the lively narrator from here (or back to the text as written). */
+    val onLively: (() -> Unit)? = null,
     val onBackToPage: (() -> Unit)? = null,
     val onMinimize: (() -> Unit)? = null,
     val onHide: (() -> Unit)? = null,
@@ -317,6 +319,14 @@ fun PlayerBar(
                 )
                 if (state.status != Status.Error) {
                     actions.onReadingView?.let { SmallIcon(R.drawable.ic_book, "Open in reading view", it) }
+                    actions.onLively?.let {
+                        val on = state.label == "Lively"
+                        SmallIcon(
+                            R.drawable.ic_lively,
+                            if (on) "Back to the text as written" else "Read as a lively narrator",
+                            it, tint = if (on) Vermilion else Muted,
+                        )
+                    }
                     actions.onTapMode?.let { SmallIcon(R.drawable.ic_tap, "Read from a spot you tap", it) }
                     actions.onExplain?.let {
                         if (state.label != "Explanation" && state.chunk != null) {

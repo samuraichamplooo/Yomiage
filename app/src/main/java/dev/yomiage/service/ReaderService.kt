@@ -501,6 +501,46 @@ class ReaderService : AccessibilityService() {
         }
     }
 
+    // How to get back to the text as written after switching to the lively narrator.
+    private var livelyBack: (() -> Unit)? = null
+
+    /**
+     * The player's Lively button: retells what's being read as a lively narrator, from the paragraph
+     * being read on. Pressed again (while lively), goes back to the text as written, from where the
+     * lively part began. With nothing being read, retells the screen.
+     */
+    fun toggleLively() {
+        val st = Reader.state.value
+        if (st.label == Explainer.LABEL_LIVELY) {
+            val back = livelyBack
+            livelyBack = null
+            if (back != null) back() else readScreen(ocr = false, simple = false, lively = false)
+            return
+        }
+        val snap = if (st.status != Status.Idle) Reader.snapshot() else null
+        if (snap == null || snap.label != null) {
+            readScreen(ocr = false, simple = false, lively = true)
+            return
+        }
+        val from = (snap.chunks.getOrNull(snap.chunkIndex) ?: snap.chunks.firstOrNull())?.block ?: 0
+        val blocks = snap.blocks.drop(from).filter { !it.hold && it.text.isNotBlank() }.map { TextBlock(it.text) }
+        if (blocks.isEmpty()) return
+        val p = page?.takeIf { it.id == snap.session }
+        val screen = p?.blocks() ?: screenBlocks.takeIf { snap.session == screenSession }
+        val original = snap.blocks
+        val fromScreen = snap.fromScreen
+        val back: () -> Unit = {
+            val id = Reader.read(original, startBlock = from, fromScreen = fromScreen)
+            if (fromScreen && screen != null) {
+                attachScreen(id, screen)
+                // The page carries on to the end (and figures get explained) as before.
+                if (p != null && page === p) p.adopt(id)
+            }
+        }
+        livelyBack = back
+        Explainer.readSimplified(blocks, fallback = back, lively = true)
+    }
+
     /** Explains the paragraph being read in plain language, then carries on with the page. */
     fun explainCurrent() {
         val st = Reader.state.value

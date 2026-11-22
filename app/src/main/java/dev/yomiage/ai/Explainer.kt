@@ -111,7 +111,7 @@ object Explainer {
         val sb = StringBuilder()
         var total = 0
         for (b in blocks) {
-            if (total > 24_000) break
+            if (total > (if (lively) 120_000 else 24_000)) break
             if (sb.isNotEmpty() && sb.length + b.text.length > 4_500) {
                 sections.add(sb.toString())
                 sb.setLength(0)

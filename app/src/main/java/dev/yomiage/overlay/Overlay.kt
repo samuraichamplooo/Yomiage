@@ -446,6 +446,7 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             onTapMode = { service.startTapMode() },
             onExplain = { service.explainCurrent() },
             onReadingView = { service.openReadingView() },
+            onLively = { service.toggleLively() },
             onBackToPage = { Explainer.backToPage() },
             onMinimize = { Prefs.update { it.copy(playerMini = true) } },
             onHide = { hidePlayer() },
