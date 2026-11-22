@@ -12,8 +12,20 @@ import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/** An online voice can't be used right now; [limit] means a usage limit was reached. */
-class VoiceUnavailable(message: String, val limit: Boolean = false) : Exception(message)
+/**
+ * An online voice can't be used right now. [limit]: a usage limit was reached. [setup]: something
+ * only you can fix (a key, or Groq's one-time terms), shown in Voice settings instead of popping up.
+ * [link]: where to fix it.
+ */
+class VoiceUnavailable(
+    message: String,
+    val limit: Boolean = false,
+    val setup: Boolean = false,
+    val link: String? = null,
+) : Exception(message)
+
+/** Groq's page for Orpheus, where it asks you to accept the model's terms. */
+const val ORPHEUS_TERMS_URL = "https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english"
 
 /** How online voices are asked to read. */
 object Delivery {
@@ -60,7 +72,7 @@ object CloudVoices {
 
     fun gemini(text: String, voice: Voice): FloatArray {
         val key = Prefs.current.geminiKey.trim()
-        if (key.isEmpty()) throw VoiceUnavailable("Gemini voices need your Gemini key (under Simple explanations).")
+        if (key.isEmpty()) throw VoiceUnavailable("Gemini voices need your Gemini key (under Simple explanations).", setup = true)
         val style = Delivery.geminiStyle(Prefs.current.delivery)
         val order = if (geminiModel >= 0) listOf(geminiModel) + geminiModels.indices.filter { it != geminiModel }
         else geminiModels.indices.toList()
@@ -154,7 +166,7 @@ object CloudVoices {
 
     fun orpheus(text: String, voice: Voice): FloatArray {
         val key = Prefs.current.groqKey.trim()
-        if (key.isEmpty()) throw VoiceUnavailable("Orpheus voices need your Groq key (under Simple explanations).")
+        if (key.isEmpty()) throw VoiceUnavailable("Orpheus voices need your Groq key (under Simple explanations).", setup = true)
         val tag = Delivery.orpheusTag(Prefs.current.delivery)
         // Orpheus takes up to 200 characters at a time (direction included).
         val pieces = split(text, 200 - tag.length - 1)
@@ -221,10 +233,15 @@ object CloudVoices {
                 null
             } ?: "HTTP $code"
             throw when {
+                msg.contains("terms", ignoreCase = true) -> VoiceUnavailable(
+                    "Groq needs you to accept the Orpheus model's terms once. Sign in to the Groq console, accept " +
+                        "them, then tap Try again.",
+                    setup = true,
+                    link = Regex("""https://console\.groq\.com[^\s"')]*""").find(msg)?.value?.trimEnd('.', ',')
+                        ?: ORPHEUS_TERMS_URL,
+                )
                 code == 429 -> VoiceUnavailable("Usage limit reached for now. $msg".trim(), limit = true)
-                code == 401 || code == 403 -> VoiceUnavailable("The key was refused: $msg")
-                msg.contains("terms", ignoreCase = true) ->
-                    VoiceUnavailable("Accept the Orpheus model terms once in the Groq console (console.groq.com), then try again.")
+                code == 401 || code == 403 -> VoiceUnavailable("The key was refused: $msg", setup = true)
                 gemini && (code == 404 || code == 400) -> ModelGone(msg)
                 else -> VoiceUnavailable(msg)
             }

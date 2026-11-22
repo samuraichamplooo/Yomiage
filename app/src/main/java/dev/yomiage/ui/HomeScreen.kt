@@ -97,6 +97,7 @@ import dev.yomiage.data.Voices
 import dev.yomiage.data.VoiceEngine
 import dev.yomiage.tts.Delivery
 import dev.yomiage.tts.SupertonicPack
+import dev.yomiage.tts.VoiceRouter
 import dev.yomiage.overlay.PlayerActions
 import dev.yomiage.overlay.PlayerBar
 import dev.yomiage.overlay.speedLabel
@@ -1071,6 +1072,7 @@ private fun VoiceSection(settings: YSettings, modelReady: Boolean) {
                 ).joinToString(" · "),
                 color = Faint, fontSize = 13.sp,
             )
+            if (selected.online) VoiceIssueCard(selected, settings)
             Spacer(Modifier.height(12.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip("Kokoro", engine == VoiceEngine.KOKORO) { tab = VoiceEngine.KOKORO.ordinal }
@@ -1220,6 +1222,59 @@ private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
         Text(label, color = if (selected) OnSeal else PaperWhite, fontSize = 13.sp)
+    }
+}
+
+/**
+ * Why the chosen online voice isn't reading (Heart reads meanwhile), with a way to fix it. This is
+ * where setup problems live instead of popping up every time reading starts.
+ */
+@Composable
+private fun VoiceIssueCard(voice: Voice, settings: YSettings) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { VoiceRouter.load(context) }
+    val all by VoiceRouter.issues.collectAsState()
+    // Through currentIssue, so a new key clears an old key problem right away.
+    val issue = remember(all, voice.engine, settings.geminiKey, settings.groqKey) { VoiceRouter.currentIssue(voice.engine) }
+    var checking by remember { mutableStateOf(false) }
+    var fixed by remember(voice.id) { mutableStateOf(false) }
+    if (issue == null) {
+        if (fixed) {
+            Spacer(Modifier.height(8.dp))
+            Text("✓ ${voice.engine.label} is working.", color = Good, fontSize = 13.sp)
+        }
+        return
+    }
+    Spacer(Modifier.height(10.dp))
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(CardHigh, RoundedCornerShape(14.dp))
+            .padding(12.dp),
+    ) {
+        Text(
+            "${voice.engine.label} isn't reading yet. Heart reads instead.",
+            color = PaperWhite, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(issue.message, color = SoftText, fontSize = 12.sp, lineHeight = 16.sp)
+        Spacer(Modifier.height(10.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            issue.link?.let { link ->
+                StepButton(if ("terms" in issue.message) "Accept terms on Groq" else "Open Groq") { openUrl(context, link) }
+            }
+            StepButton(if (checking) "Checking…" else "Try again", outlined = issue.link != null) {
+                if (checking) return@StepButton
+                checking = true
+                scope.launch {
+                    val left = VoiceRouter.check(context, voice)
+                    fixed = left == null
+                    checking = false
+                }
+            }
+            StepButton("Use Heart instead", outlined = true) { Reader.setVoice(Voices.fallback) }
+        }
     }
 }
 

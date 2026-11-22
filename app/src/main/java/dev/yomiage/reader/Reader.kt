@@ -377,6 +377,7 @@ object Reader {
     private fun mergeSize(v: Voice) = if (v.engine == VoiceEngine.GEMINI) 420 else 0
 
     fun setVoice(voice: Voice) {
+        VoiceRouter.load(app)
         VoiceRouter.retry(voice.engine)
         Prefs.update { it.copy(voiceId = voice.id) }
         val s = session ?: return
