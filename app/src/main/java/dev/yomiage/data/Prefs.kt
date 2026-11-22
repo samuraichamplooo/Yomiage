@@ -29,6 +29,8 @@ data class Settings(
     val showText: Boolean = true,    // show the text panel for simplified reading
     val playerVisibility: Int = PlayerVisibility.ALWAYS,
     val groqKey: String = "",        // backup AI (free key from console.groq.com)
+    val claudeKey: String = "",      // optional Claude API key (platform.claude.com); first choice when set
+    val claudeModel: String = "claude-sonnet-5-5",
     val useOnDevice: Boolean = true, // fall back to Gemini Nano on the phone
     val followScroll: Boolean = true,   // scroll the page along with the voice
     val smartPage: Boolean = true,      // on web pages: skip menus, toolbars, footers and page numbers
@@ -105,6 +107,8 @@ object Prefs {
             playerVisibility = sp.getInt("playerVisibility", d.playerVisibility)
                 .let { if (it == PlayerVisibility.NEVER || it == PlayerVisibility.DOT) it else PlayerVisibility.ALWAYS },
             groqKey = sp.getString("groqKey", d.groqKey) ?: "",
+            claudeKey = sp.getString("claudeKey", d.claudeKey) ?: "",
+            claudeModel = sp.getString("claudeModel", d.claudeModel) ?: d.claudeModel,
             useOnDevice = sp.getBoolean("useOnDevice", d.useOnDevice),
             followScroll = sp.getBoolean("followScroll", d.followScroll),
             smartPage = sp.getBoolean("smartPage", d.smartPage),
@@ -146,6 +150,8 @@ object Prefs {
             .putBoolean("showText", s.showText)
             .putInt("playerVisibility", s.playerVisibility)
             .putString("groqKey", s.groqKey)
+            .putString("claudeKey", s.claudeKey)
+            .putString("claudeModel", s.claudeModel)
             .putBoolean("useOnDevice", s.useOnDevice)
             .putBoolean("followScroll", s.followScroll)
             .putBoolean("smartPage", s.smartPage)

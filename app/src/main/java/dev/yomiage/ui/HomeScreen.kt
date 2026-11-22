@@ -80,6 +80,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.yomiage.BuildConfigInfo
 import dev.yomiage.R
 import dev.yomiage.ai.Ai
+import dev.yomiage.ai.Claude
 import dev.yomiage.ai.Explainer
 import dev.yomiage.ai.NanoState
 import dev.yomiage.ai.OnDevice
@@ -671,8 +672,39 @@ private fun SimpleSection(context: Context, settings: YSettings) {
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Yomiage tries Gemini first, then Groq, then the AI built into your phone. If one isn't answering, " +
-                    "it moves to the next on its own and skips the busy one for a while.",
+                "Yomiage tries Claude first if you've added a key, then Gemini, then Groq, then the AI built into your " +
+                    "phone. If one isn't answering, it moves to the next on its own and skips the busy one for a while.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Claude (Anthropic) · best for learning", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "Optional. When a key is added, Claude takes over Simplify, Explain this, the lively narrator, and the " +
+                    "table and diagram explanations (it looks at the pictures too). The others stay as automatic backups. " +
+                    "The voice you hear doesn't change.",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            KeyField(settings.claudeKey, "Claude API key (sk-ant-…)") { v -> Prefs.update { it.copy(claudeKey = v) } }
+            Spacer(Modifier.height(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((id, label) in Claude.models) {
+                    FilterChip(label, settings.claudeModel == id) { Prefs.update { it.copy(claudeModel = id) } }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                StepButton("Get a Claude key", outlined = true) { openUrl(context, "https://platform.claude.com/settings/keys") }
+                StepButton("Add credits", outlined = true) { openUrl(context, "https://platform.claude.com/settings/billing") }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "The key comes from the Claude Console and is billed there, separately from your Claude app subscription. " +
+                    "Pay as you go: explaining a paragraph costs well under a cent with Sonnet, and retelling a long chapter " +
+                    "as the lively narrator is roughly 10 to 20 cents. Haiku is much cheaper. Anthropic doesn't train on API " +
+                    "requests by default.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
         }
@@ -805,7 +837,7 @@ private fun SimpleSection(context: Context, settings: YSettings) {
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                "Gemini and Groq run online. On Gemini's free tier, Google may use what you send to improve its products, " +
+                "Claude, Gemini and Groq run online. On Gemini's free tier, Google may use what you send to improve its products, " +
                     "so avoid them for private documents. Gemini Nano keeps everything on the phone.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
@@ -819,8 +851,8 @@ private fun SimpleSection(context: Context, settings: YSettings) {
         Divider()
         SwitchRow(
             "Always read as a lively narrator",
-            "AI retells each page like an engaging teacher or podcast host, keeping every fact and key term. Free with " +
-                "your Gemini or Groq key. Also in the bubble's long-press menu.",
+            "AI retells each page like an engaging teacher or podcast host, keeping every fact and key term. Uses Claude " +
+                "if you've added it, otherwise free with your Gemini or Groq key. Also on the player's Lively button.",
             settings.alwaysLively,
         ) { on -> Prefs.update { it.copy(alwaysLively = on, alwaysSimple = if (on) false else it.alwaysSimple) } }
     }

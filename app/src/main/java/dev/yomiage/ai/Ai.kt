@@ -13,13 +13,15 @@ open class AiException(message: String) : Exception(message)
 class Picture(val jpeg: ByteArray, val bitmap: Bitmap)
 
 enum class Engine(val label: String) {
+    CLAUDE("Claude"),
     GEMINI("Gemini"),
     GROQ("Groq"),
     ON_DEVICE("On-device Gemini Nano"),
 }
 
 /**
- * Picks an AI to write simple explanations: Gemini first, then Groq, then Gemini Nano on the phone.
+ * Picks an AI to write simple explanations: Claude first (when you've added a key), then Gemini,
+ * then Groq, then Gemini Nano on the phone.
  * If one fails, the next is tried right away, and the one that failed waits at the back of the line
  * for a while so you don't sit through it again.
  */
@@ -34,6 +36,7 @@ object Ai {
     fun configured(): List<Engine> {
         val s = Prefs.current
         val list = ArrayList<Engine>()
+        if (s.claudeKey.isNotBlank()) list.add(Engine.CLAUDE)
         if (s.geminiKey.isNotBlank()) list.add(Engine.GEMINI)
         if (s.groqKey.isNotBlank()) list.add(Engine.GROQ)
         if (s.useOnDevice && OnDevice.mightWork()) list.add(Engine.ON_DEVICE)
@@ -60,7 +63,7 @@ object Ai {
     ): Engine {
         val engines = ordered()
         if (engines.isEmpty()) {
-            throw AiException("Add a free Gemini or Groq key, or turn on on-device AI, in Yomiage.")
+            throw AiException("Add a Claude, Gemini or Groq key, or turn on on-device AI, in Yomiage.")
         }
         var lastError: Exception? = null
         for ((i, engine) in engines.withIndex()) {
@@ -103,6 +106,9 @@ object Ai {
         image: Picture? = null,
     ) {
         when (engine) {
+            Engine.CLAUDE -> withContext(Dispatchers.IO) {
+                Claude.stream(Prefs.current.claudeKey, system, user, cancelled, image?.jpeg, onText)
+            }
             Engine.GEMINI -> withContext(Dispatchers.IO) {
                 Gemini.stream(
                     Prefs.current.geminiKey, system, user, cancelled,
@@ -131,6 +137,7 @@ object Ai {
         val out = ArrayList<String>()
         for (engine in Engine.values()) {
             val skip = when (engine) {
+                Engine.CLAUDE -> if (s.claudeKey.isBlank()) "no key added" else null
                 Engine.GEMINI -> if (s.geminiKey.isBlank()) "no key added" else null
                 Engine.GROQ -> if (s.groqKey.isBlank()) "no key added" else null
                 Engine.ON_DEVICE -> if (!s.useOnDevice) "turned off" else null
@@ -145,6 +152,7 @@ object Ai {
                 if (sb.isBlank()) "✗ answered with nothing" else {
                     coolDown.remove(engine)
                     "✓ works" + when (engine) {
+                        Engine.CLAUDE -> " (${Claude.lastModel})"
                         Engine.GEMINI -> " (${Gemini.lastModel})"
                         Engine.GROQ -> " (${Groq.lastModel})"
                         Engine.ON_DEVICE -> ""

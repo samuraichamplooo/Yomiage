@@ -102,7 +102,7 @@ object Explainer {
     fun readSimplified(blocks: List<TextBlock>, fallback: (() -> Unit)? = null, lively: Boolean = false) {
         if (!hasKey()) {
             Reader.showMessage(
-                "Add a free AI key or turn on on-device AI in Yomiage to use ${if (lively) "the lively narrator" else "simple mode"}."
+                "Add an AI key (Claude, Gemini or Groq) or turn on on-device AI in Yomiage to use ${if (lively) "the lively narrator" else "simple mode"}."
             )
             return
         }
@@ -136,7 +136,7 @@ object Explainer {
     /** Explains the paragraph being read, then returns to the next sentence of the page. */
     fun explainCurrent(screen: List<ScreenBlock>?) {
         if (!hasKey()) {
-            Reader.showMessage("Add a free AI key or turn on on-device AI in Yomiage to get simple explanations.")
+            Reader.showMessage("Add an AI key (Claude, Gemini or Groq) or turn on on-device AI in Yomiage to get simple explanations.")
             return
         }
         val snap = Reader.snapshot() ?: return
