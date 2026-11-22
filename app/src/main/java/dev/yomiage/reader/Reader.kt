@@ -98,7 +98,10 @@ object Reader {
     val revision: StateFlow<Int> = _revision
 
     /** Reading waits this long at a figure for its explanation, then moves on without it. */
-    private const val HOLD_TIMEOUT_MS = 25_000L
+    // How long reading waits at a figure whose explanation hasn't started. It isn't lost if it's
+    // later than that: it's read after the paragraph reading is on by then.
+    private const val HOLD_TIMEOUT_MS = 12_000L
+    private const val LATE_MAX_BLOCKS = 8   // further on than this, a late explanation is skipped
 
     /** True while a session exists (playing, paused, finished or showing a message). */
     val isBusy: Boolean get() = _state.value.status != Status.Idle
@@ -210,6 +213,83 @@ object Reader {
         }
         _revision.value++
         return true
+    }
+
+    /**
+     * Puts the explanation of a figure or table ([block]) into the reading while it's being written:
+     * each finished sentence can be read as soon as it arrives. [text] is everything written so far;
+     * [done] once it's complete. If reading already went past the figure (it only waits so long),
+     * the explanation is read after the paragraph it's on, starting "About Figure 2.1:". Returns
+     * false if that session is no longer the current one.
+     */
+    fun feedHold(id: Long, block: Int, text: String, done: Boolean): Boolean {
+        val s = session ?: return false
+        if (s.id != id) return false
+        var changed = false
+        s.withLock {
+            val name = s.holdNames.getOrPut(block) {
+                s.blocks.getOrNull(block)?.takeIf { it.hold }?.text?.ifBlank { null } ?: "the figure"
+            }
+            val full = text.trimStart()
+            val from = s.fed[block] ?: 0
+            val upTo = if (done) full.trimEnd().length else readyUpTo(full, from)
+            val i = (0 until s.n).firstOrNull { s.chunks[it].hold && s.chunks[it].block == block }
+            if (i != null) {
+                if (!done && upTo <= from) return@withLock
+                val pieces = if (upTo > from) explainedChunksLocked(s, block, full, from, upTo, last = done) else emptyList()
+                s.fed[block] = max(from, upTo)
+                // Until it's finished, a placeholder stays after what's ready, for the rest.
+                val rest = if (done) emptyList() else listOf(Chunk(name, block, 0, IntArray(name.length), hold = true))
+                s.replaceChunkLocked(i, pieces + rest)
+                changed = true
+            } else if (done && upTo > from && !s.finished && !s.draining && s.wChunk < s.n) {
+                // Reading moved on without it: read it once the current paragraph ends.
+                val at = s.wChunk
+                val here = s.chunks[at].block
+                if (here < block || here - block > LATE_MAX_BLOCKS) return@withLock
+                var j = at + 1
+                while (j < s.n && j - at <= 6 && s.chunks[j].block == here) j++
+                if (j - at > 6) j = at + 1   // a long paragraph: right after this sentence instead
+                val intro = (if (from == 0) "About " else "More about ") + name + ":"
+                val pieces = explainedChunksLocked(s, block, full, from, upTo, last = true)
+                s.fed[block] = upTo
+                s.insertChunksLocked(j, listOf(Chunk(intro, block, TextChunker.GAP_SENTENCE, IntArray(intro.length))) + pieces)
+                changed = true
+            }
+            if (changed) s.publishLocked()
+        }
+        if (changed) _revision.value++
+        return true
+    }
+
+    /** Where the last whole sentence in [text] (after [from]) ends, or [from] if none has yet. */
+    private fun readyUpTo(text: String, from: Int): Int {
+        var best = from
+        var k = from
+        while (k < text.length - 1) {
+            val c = text[k]
+            if ((c == '.' || c == '!' || c == '?') && text[k + 1].isWhitespace()) {
+                // Skip "e.g. " and single letters ("U.S. "): not the end of a sentence.
+                val word = text.substring(0, k).takeLastWhile { !it.isWhitespace() }
+                if (word.length > 1 && !word.contains('.') && k + 1 - from >= 20) best = k + 1
+            }
+            k++
+        }
+        return best
+    }
+
+    /** Chunks for [full] from [from] to [upTo], positioned within the explanation's whole text. */
+    private fun explainedChunksLocked(s: Session, block: Int, full: String, from: Int, upTo: Int, last: Boolean): List<Chunk> {
+        val old = s.blocks.getOrNull(block)
+        val nb = TextBlock(full.substring(0, upTo), old?.bounds, BlockKind.EXPLAINED)
+        s.blocks = s.blocks.toMutableList().also { if (block < it.size) it[block] = nb }
+        val part = TextBlock(full.substring(from, upTo), old?.bounds, BlockKind.EXPLAINED)
+        val built = TextChunker.build(listOf(part), 0, 0, Prefs.current.readUrls, rampFrom = 10)
+        return built.mapIndexed { k, c ->
+            // Between pieces of one explanation, just a sentence's pause.
+            val gap = if (!last && k == built.size - 1) TextChunker.GAP_SENTENCE else c.gapMs
+            Chunk(c.text, block, gap, IntArray(c.map.size) { c.map[it] + from })
+        }
     }
 
     /** Jumps to the start of paragraph [block] (tapping a paragraph in the reading view). */
@@ -488,6 +568,9 @@ object Reader {
         val lengths = ArrayList<Int>(chunkList.map { -1 })
         val speechLen = ArrayList<Int>(chunkList.map { 1 })   // frames of actual speech (without the pause after it)
         var open = false
+        // Figure and table explanations coming in: how much of each is in the chunks, and its name.
+        val fed = HashMap<Int, Int>()
+        val holdNames = HashMap<Int, String>()
         var label: String? = null
         var waiting: String? = null
         val lock = ReentrantLock()
@@ -607,6 +690,23 @@ object Reader {
                 if (heardChunk > i) heardChunk += d
                 if (seekAbsChunk > i) seekAbsChunk += d
             }
+        }
+
+        /** Adds [with] before chunk [at], keeping every position in step. */
+        fun insertChunksLocked(at: Int, with: List<Chunk>) {
+            if (with.isEmpty()) return
+            chunks.addAll(at, with)
+            audio.addAll(at, List(with.size) { null })
+            lengths.addAll(at, List(with.size) { -1 })
+            speechLen.addAll(at, List(with.size) { 1 })
+            val d = with.size
+            // A sentence being made right now belongs to the old numbering: let it be redone.
+            epoch++
+            if (wChunk >= at) wChunk += d
+            if (bChunk >= at) bChunk += d
+            if (heardChunk >= at) heardChunk += d
+            if (seekAbsChunk >= at) seekAbsChunk += d
+            if (holdIndex >= at) holdIndex += d
         }
 
         fun invalidateAllLocked() {

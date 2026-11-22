@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.util.Log
+import kotlinx.coroutines.CancellableContinuation
+import androidx.annotation.RequiresApi
 import android.view.Display
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
@@ -59,32 +61,45 @@ object OcrScanner {
     internal suspend fun screenshot(service: AccessibilityService): Bitmap? =
         suspendCancellableCoroutine { cont ->
             try {
-                service.takeScreenshot(
-                    Display.DEFAULT_DISPLAY,
-                    service.mainExecutor,
-                    object : AccessibilityService.TakeScreenshotCallback {
-                        override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
-                            val buffer = result.hardwareBuffer
-                            val bmp = try {
-                                Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
-                                    ?.copy(Bitmap.Config.ARGB_8888, false)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "screenshot convert failed", e)
-                                null
-                            } finally {
-                                buffer.close()
-                            }
-                            if (cont.isActive) cont.resume(bmp)
-                        }
-
-                        override fun onFailure(errorCode: Int) {
-                            Log.w(TAG, "screenshot failed: $errorCode")
-                            if (cont.isActive) cont.resume(null)
-                        }
-                    },
-                )
+                service.takeScreenshot(Display.DEFAULT_DISPLAY, service.mainExecutor, shotCallback(cont))
             } catch (e: Exception) {
                 Log.w(TAG, "screenshot failed", e)
+                if (cont.isActive) cont.resume(null)
+            }
+        }
+
+    /**
+     * A screenshot of just one app window (Android 14 and newer): no Yomiage player or highlight
+     * on top, and nothing needs hiding first.
+     */
+    @RequiresApi(34)
+    internal suspend fun windowScreenshot(service: AccessibilityService, windowId: Int): Bitmap? =
+        suspendCancellableCoroutine { cont ->
+            try {
+                service.takeScreenshotOfWindow(windowId, service.mainExecutor, shotCallback(cont))
+            } catch (e: Exception) {
+                Log.w(TAG, "window screenshot failed", e)
+                if (cont.isActive) cont.resume(null)
+            }
+        }
+
+    private fun shotCallback(cont: CancellableContinuation<Bitmap?>) =
+        object : AccessibilityService.TakeScreenshotCallback {
+            override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+                val buffer = result.hardwareBuffer
+                val bmp = try {
+                    Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
+                } catch (e: Exception) {
+                    Log.w(TAG, "screenshot convert failed", e)
+                    null
+                } finally {
+                    buffer.close()
+                }
+                if (cont.isActive) cont.resume(bmp)
+            }
+
+            override fun onFailure(errorCode: Int) {
+                Log.w(TAG, "screenshot failed: $errorCode")
                 if (cont.isActive) cont.resume(null)
             }
         }

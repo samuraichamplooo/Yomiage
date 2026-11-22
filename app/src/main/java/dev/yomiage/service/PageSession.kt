@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import dev.yomiage.ai.Ai
@@ -21,6 +22,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import kotlin.math.max
@@ -45,6 +50,15 @@ class PageSession(
         const val IMAGE_DATA = "AccessibilityNodeInfo.imageData"
         const val NEAR_END_CHUNKS = 8      // look for more of the page when this close to the end
         const val EXPLAIN_AHEAD_BLOCKS = 14 // start explaining a figure this many paragraphs early
+        const val AT_ONCE = 2               // explanations being written at the same time
+        const val PICTURE_EDGE = 1568       // longest side of a picture sent to the AI (sharp labels)
+
+        /** Explanations already made (reading the same page again doesn't ask again). */
+        private val made = object : LinkedHashMap<String, String>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 80
+        }
+        /** Screenshots one at a time (Android allows about one a second). */
+        private val shots = Mutex()
     }
 
     /** A figure or table waiting for its plain-language explanation. */
@@ -61,6 +75,8 @@ class PageSession(
     private var loading = false
     private var watchJob: Job? = null
     private var explainJob: Job? = null
+    private val started = HashSet<Hold>()
+    private val slots = Semaphore(AT_ONCE)
     private var loadJob: Job? = null
 
     /**
@@ -178,7 +194,10 @@ class PageSession(
         for ((i, t) in texts.withIndex()) {
             if (!t.hold) continue
             val b = scr[i]
+            val heading = screens.subList(0, (base + i).coerceAtMost(screens.size))
+                .lastOrNull { it.kind == BlockKind.HEADING }?.text?.take(200)
             val context = buildString {
+                if (heading != null) append("It's in the section: ").append(heading).append("\n\n")
                 // The caption usually comes right after a picture; the paragraph before sets the scene.
                 val before = scr.getOrNull(i - 1)?.takeIf { it !== b && it.kind != BlockKind.FIGURE }?.text
                 val after = scr.getOrNull(i + 1)?.takeIf { it !== b }?.text
@@ -324,75 +343,119 @@ class PageSession(
 
     // ---------------------------------------------------------------- figures and tables
 
-    /** Explains the next figure or table that reading is getting close to. */
+    /**
+     * Explains figures and tables as reading gets close to them, a couple at a time, so a picture
+     * waiting to come on screen doesn't hold up a table after it.
+     */
     private fun explainNext() {
         explainJob = scope.launch {
-            while (holds.isNotEmpty() && Reader.state.value.session == id) {
+            while (Reader.state.value.session == id && (holds.isNotEmpty() || started.isNotEmpty())) {
                 val at = Reader.state.value.chunk?.block ?: 0
-                // Ones already passed: let them go.
+                // Ones reading already passed without starting them (it skipped ahead): let them go.
                 holds.filter { it.block < at }.forEach { h ->
                     holds.remove(h)
                     Reader.resolveHold(id, h.block, null)
                 }
-                val next = holds.minByOrNull { it.block } ?: return@launch
-                if (next.block - at > EXPLAIN_AHEAD_BLOCKS) {
-                    delay(1_500)
-                    continue
+                for (h in holds.sortedBy { it.block }) {
+                    if (h.block - at > EXPLAIN_AHEAD_BLOCKS) break
+                    holds.remove(h)
+                    started.add(h)
+                    launch {
+                        try {
+                            explainOne(h)
+                        } catch (e: CancellationException) {
+                            holds.add(h)   // not done: pick it up again later
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "couldn't explain block ${h.block}", e)
+                            Reader.resolveHold(id, h.block, fallbackFor(h))
+                        } finally {
+                            started.remove(h)
+                        }
+                    }
                 }
-                holds.remove(next)
-                val text = try {
-                    if (next.screen.kind == BlockKind.TABLE) explainTable(next) else explainFigure(next)
-                } catch (e: CancellationException) {
-                    holds.add(next)   // not done: pick it up again later
-                    throw e
-                } catch (e: Exception) {
-                    Log.w(TAG, "couldn't explain block ${next.block}", e)
-                    null
-                }
-                // No explanation: at least say what the page calls the picture, if it says.
-                val alt = next.screen.text.trim()
-                val fallback = if (next.screen.kind == BlockKind.FIGURE && usefulAlt(alt)) "Picture: $alt" else null
-                Reader.resolveHold(id, next.block, text ?: fallback)
+                delay(600)
             }
         }
     }
 
-    private fun system(what: String) =
-        "You explain $what from textbooks and web pages to someone who is listening, not looking." +
-            Explainer.audienceLine() + " Plain friendly words and short sentences, about 50 to 110 words. " +
-            "Say what it shows and what it means, and how its parts connect. Explain any hard term in a few words. " +
-            "Stay accurate: don't invent details you can't see or read. Plain text only: no markdown, no lists, " +
-            "no symbols, no emoji."
-
-    private suspend fun explainTable(h: Hold): String? {
-        val answer = Ai.ask(
-            system("tables"),
-            h.context + "\n\nIn a few sentences, explain simply what this table tells us and the main pattern " +
-                "or takeaway. Start with \"In short,\".",
-        )
-        return answer.ifBlank { null }
+    /** What to say with no explanation: what the page calls the picture, if it says. */
+    private fun fallbackFor(h: Hold): String? {
+        val alt = h.screen.text.trim()
+        return if (h.screen.kind == BlockKind.FIGURE && usefulAlt(alt)) "Picture: $alt" else null
     }
 
-    private suspend fun explainFigure(h: Hold): String? {
-        val picture = picture(h.screen)
-        val alt = h.screen.text.trim()
-        if (picture == null && alt.isBlank() && !h.context.contains("caption")) return null
-        val ask = if (picture != null) {
-            "Here is a figure from the page." + (if (h.context.isNotBlank()) "\n\n${h.context}" else "") +
-                "\n\nExplain this figure simply. Start with what kind of picture it is, for example \"This flowchart shows…\"."
-        } else {
-            "A figure on the page couldn't be seen, but here is what the page says about it.\n\n${h.context}" +
+    private suspend fun explainOne(h: Hold) {
+        val table = h.screen.kind == BlockKind.TABLE
+        val key = (if (table) "T|" else "F|") + h.screen.text.take(500) + "|" + h.context.hashCode()
+        synchronized(made) { made[key] }?.let {
+            Reader.feedHold(id, h.block, it, done = true)
+            return
+        }
+        val picture = if (table) null else picture(h)
+        if (!table && picture == null && h.screen.text.isBlank() && !h.context.contains("caption")) {
+            Reader.resolveHold(id, h.block, fallbackFor(h))
+            return
+        }
+        val ask = when {
+            table -> h.context + "\n\nExplain simply what this table tells us: what it compares, the main pattern, " +
+                "and the one or two numbers that matter most, exactly as written. Start with \"In short,\"."
+            picture != null -> "Here is a picture from the page." + (if (h.context.isNotBlank()) "\n\n${h.context}" else "") +
+                "\n\nExplain it simply. Start with what kind of picture it is, for example \"This flowchart shows…\", " +
+                "\"This graph shows…\" or \"This photo shows…\"."
+            else -> "A figure on the page couldn't be seen, but here is what the page says about it.\n\n${h.context}" +
                 "\n\nIn two or three sentences, explain simply what this figure is about. Start with \"This figure\"."
         }
-        val answer = Ai.ask(system("figures, diagrams and pictures"), ask, picture)
-        return answer.ifBlank { null }
+        val sb = StringBuilder()
+        var complete = false
+        try {
+            slots.withPermit {
+                Ai.stream(
+                    system(if (table) "tables" else "figures, diagrams and pictures"),
+                    ask,
+                    cancelled = { Reader.state.value.session != id },
+                    image = picture,
+                ) { t ->
+                    // Each finished sentence can be read while the rest is being written.
+                    val so = synchronized(sb) { sb.append(t); plain(sb.toString()) }
+                    Reader.feedHold(id, h.block, so, done = false)
+                }
+            }
+            // Stopped early (something else started reading) isn't a whole answer: don't keep it.
+            complete = Reader.state.value.session == id
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "explaining block ${h.block} stopped", e)
+        }
+        val text = plain(synchronized(sb) { sb.toString() }).trim()
+        if (text.isEmpty()) {
+            Reader.resolveHold(id, h.block, fallbackFor(h))
+            return
+        }
+        Reader.feedHold(id, h.block, text, done = true)
+        if (complete) synchronized(made) { made[key] = text }
     }
 
+    /** Leaves out markdown the AI might add anyway (the same way as the text grows). */
+    private fun plain(s: String): String = s.replace("*", "").replace("#", "").replace("`", "")
+
+    private fun system(what: String) =
+        "You explain $what from textbooks and web pages to someone who is listening, not looking." +
+            Explainer.audienceLine() + " Use plain, friendly words and short sentences, about 60 to 120 words in " +
+            "all. Your first sentence says what it is and its main point, because it's read aloud the moment it's " +
+            "written. Then explain what it shows and how the parts connect: what leads to what, what is bigger or " +
+            "smaller, what changes. Use the exact labels, names, numbers and units it shows. Explain any hard term " +
+            "in a few words, and connect it to the text around it. Be precise: describe only what you can actually " +
+            "see or read, and if part of it is too small or unclear to read, say so in a few words instead of " +
+            "guessing. Plain text only: no markdown, lists, symbols or emoji."
+
     /**
-     * Gets the picture: browsers hand it over directly; otherwise, once it's on screen, it's cut
-     * out of a screenshot.
+     * Gets the picture: browsers hand it over directly; otherwise it's cut out of a screenshot as
+     * soon as it's on screen (reading scrolls along, so it usually is before reading gets there).
      */
-    private suspend fun picture(b: ScreenBlock): Picture? {
+    private suspend fun picture(h: Hold): Picture? {
+        val b = h.screen
         val node = b.node
         if (node != null) {
             val bytes = withContext(Dispatchers.IO) { imageData(node) }
@@ -401,9 +464,11 @@ class PageSession(
                 if (bmp != null) return toPicture(bmp)
             }
         }
-        // Wait for reading to bring the figure on screen (it scrolls along), then capture it.
-        repeat(120) {
-            if (Reader.state.value.session != id) return null
+        val deadline = SystemClock.elapsedRealtime() + 6 * 60_000L
+        var tries = 0
+        while (Reader.state.value.session == id && SystemClock.elapsedRealtime() < deadline) {
+            // Reading went well past it without it ever being on screen: explain from the caption.
+            if ((Reader.state.value.chunk?.block ?: 0) > h.block + 1) return null
             val r = Rect()
             if (node != null) {
                 try {
@@ -419,14 +484,36 @@ class PageSession(
             val onScreen = !r.isEmpty && visible.intersect(sc)
             val enough = onScreen && (visible.height() >= r.height() * 0.8f || visible.height() >= sc.height() * 0.6f)
             if (enough && (pkg == null || service.frontPackage() == pkg)) {
-                val shot = service.captureScreen() ?: return null
-                val crop = Rect(visible)
-                if (!crop.intersect(0, 0, shot.width, shot.height) || crop.width() < 40 || crop.height() < 40) return null
-                return toPicture(Bitmap.createBitmap(shot, crop.left, crop.top, crop.width(), crop.height()))
+                val pic = shots.withLock { capture(node, visible) }
+                if (pic != null) return pic
+                if (++tries >= 3) return null
+                delay(1_100)   // screenshots are limited to about one a second
+                continue
             }
-            delay(1_500)
+            delay(700)
         }
         return null
+    }
+
+    /** Cuts [area] (screen coordinates) out of a screenshot of the page's window, or of the screen. */
+    private suspend fun capture(node: AccessibilityNodeInfo?, area: Rect): Picture? {
+        if (node != null) {
+            service.captureWindowOf(node)?.let { (shot, win) ->
+                val sx = shot.width / win.width().toFloat()
+                val sy = shot.height / win.height().toFloat()
+                val crop = Rect(
+                    ((area.left - win.left) * sx).toInt(), ((area.top - win.top) * sy).toInt(),
+                    ((area.right - win.left) * sx).toInt(), ((area.bottom - win.top) * sy).toInt(),
+                )
+                if (crop.intersect(0, 0, shot.width, shot.height) && crop.width() >= 40 && crop.height() >= 40) {
+                    return toPicture(Bitmap.createBitmap(shot, crop.left, crop.top, crop.width(), crop.height()))
+                }
+            }
+        }
+        val shot = service.captureScreen() ?: return null
+        val crop = Rect(area)
+        if (!crop.intersect(0, 0, shot.width, shot.height) || crop.width() < 40 || crop.height() < 40) return null
+        return toPicture(Bitmap.createBitmap(shot, crop.left, crop.top, crop.width(), crop.height()))
     }
 
     /** Chrome can send a picture's own image data to accessibility services. */
@@ -447,14 +534,14 @@ class PageSession(
 
     private fun toPicture(src: Bitmap): Picture {
         val longest = max(src.width, src.height)
-        val bmp = if (longest > 1280) {
-            val f = 1280f / longest
+        val bmp = if (longest > PICTURE_EDGE) {
+            val f = PICTURE_EDGE.toFloat() / longest
             Bitmap.createScaledBitmap(src, (src.width * f).toInt().coerceAtLeast(1), (src.height * f).toInt().coerceAtLeast(1), true)
         } else {
             src
         }
         val out = ByteArrayOutputStream()
-        bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
         return Picture(out.toByteArray(), bmp)
     }
 }

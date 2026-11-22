@@ -344,6 +344,24 @@ class ReaderService : AccessibilityService() {
     fun frontPackage(): String? = activeAppPackage()
 
     /** A screenshot without Yomiage's own bubble, player and highlight on it. */
+    /**
+     * A screenshot of just the window [node] is in, with that window's place on screen, or null if
+     * this phone can't (then use [captureScreen]). Nothing of Yomiage's is in it.
+     */
+    suspend fun captureWindowOf(node: android.view.accessibility.AccessibilityNodeInfo): Pair<android.graphics.Bitmap, android.graphics.Rect>? {
+        if (android.os.Build.VERSION.SDK_INT < 34) return null
+        val win = try {
+            node.window
+        } catch (e: Exception) {
+            null
+        } ?: return null
+        val where = android.graphics.Rect()
+        win.getBoundsInScreen(where)
+        if (where.isEmpty) return null
+        val shot = OcrScanner.windowScreenshot(this, win.id) ?: return null
+        return shot to where
+    }
+
     suspend fun captureScreen(): android.graphics.Bitmap? {
         val o = overlay
         o?.setInvisible(true)

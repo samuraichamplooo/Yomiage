@@ -37,9 +37,9 @@ class Chunk(val text: String, val block: Int, val gapMs: Int, val map: IntArray,
 }
 
 object TextChunker {
-    private const val GAP_SPLIT = 40
-    private const val GAP_SENTENCE = 90
-    private const val GAP_BLOCK = 300
+    const val GAP_SPLIT = 40
+    const val GAP_SENTENCE = 90
+    const val GAP_BLOCK = 300
 
     private val urlRe = Regex("""(https?://|www\.)\S+""", RegexOption.IGNORE_CASE)
     private val abbreviations = setOf(
