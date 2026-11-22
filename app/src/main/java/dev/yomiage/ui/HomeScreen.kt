@@ -1072,6 +1072,31 @@ private fun VoiceSection(settings: YSettings, modelReady: Boolean) {
                         color = Bad, fontSize = 12.sp,
                     )
                 }
+                // Out of free minutes: turn on billing at Google or Groq to keep these voices going.
+                Spacer(Modifier.height(12.dp))
+                Text("Keep going past the free minutes", color = SoftText, fontSize = 13.sp)
+                Text(
+                    if (engine == VoiceEngine.GEMINI) {
+                        "Link a billing account to your Gemini key's project in Google AI Studio (tap Set up billing " +
+                            "next to the project; Google asks for at least \$5 of prepaid credit). Your same key keeps " +
+                            "working, with much higher limits."
+                    } else {
+                        "Upgrade your Groq account to the pay-as-you-go Developer plan. Your same key keeps working, " +
+                            "with much higher limits. You can set a monthly spending limit too."
+                    } + " Then pick a voice again to switch back to it right away.",
+                    color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (engine == VoiceEngine.GEMINI) {
+                        StepButton("Set up billing") { openUrl(context, "https://aistudio.google.com/apikey") }
+                    } else {
+                        StepButton("Upgrade plan") { openUrl(context, "https://console.groq.com/settings/billing/plans") }
+                        StepButton("Spending limit", outlined = true) {
+                            openUrl(context, "https://console.groq.com/settings/billing/limits")
+                        }
+                    }
+                }
                 Spacer(Modifier.height(10.dp))
                 Text("Delivery", color = SoftText, fontSize = 13.sp)
                 Spacer(Modifier.height(6.dp))
@@ -1143,6 +1168,13 @@ private fun VoiceSection(settings: YSettings, modelReady: Boolean) {
             }
         }
         Spacer(Modifier.height(10.dp))
+    }
+}
+
+private fun openUrl(context: Context, url: String) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (_: Exception) {
     }
 }
 

@@ -42,7 +42,11 @@ object VoiceRouter {
                     if (voice.engine == VoiceEngine.GEMINI) CloudVoices.gemini(text, voice) else CloudVoices.orpheus(text, voice)
                 } catch (e: VoiceUnavailable) {
                     pausedUntil[voice.engine] = now + if (e.limit) 10 * 60_000L else 90_000L
-                    tell(context, "${voice.engine.label} voice: ${e.message} Reading with Heart for now.")
+                    tell(
+                        context,
+                        "${voice.engine.label} voice: ${e.message} Reading with Heart for now." +
+                            if (e.limit) " To keep going, set up billing in Yomiage's Voice settings." else "",
+                    )
                     fallback(context, text, speed)
                 }
             }
