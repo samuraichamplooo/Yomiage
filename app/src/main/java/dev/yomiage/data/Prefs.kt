@@ -36,6 +36,8 @@ data class Settings(
     val openView: Boolean = false,      // open the reading view whenever a page starts reading
     val viewTextSp: Int = 19,           // text size in the reading view
     val theme: Int = 0,                 // ThemeKind: classic, Material You or liquid glass
+    val skipSmall: Int = 3,             // seconds for the small skip buttons
+    val skipBig: Int = 5,               // seconds for the big skip buttons (and next/previous)
 )
 
 object HighlightMode {
@@ -108,6 +110,8 @@ object Prefs {
             openView = sp.getBoolean("openView", d.openView),
             viewTextSp = sp.getInt("viewTextSp", d.viewTextSp),
             theme = sp.getInt("theme", d.theme),
+            skipSmall = sp.getInt("skipSmall", d.skipSmall),
+            skipBig = sp.getInt("skipBig", d.skipBig),
         )
     }
 
@@ -145,6 +149,8 @@ object Prefs {
             .putBoolean("openView", s.openView)
             .putInt("viewTextSp", s.viewTextSp)
             .putInt("theme", s.theme)
+            .putInt("skipSmall", s.skipSmall)
+            .putInt("skipBig", s.skipBig)
             .apply()
     }
 }

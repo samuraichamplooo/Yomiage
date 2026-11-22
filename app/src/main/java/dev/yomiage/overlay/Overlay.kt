@@ -148,6 +148,9 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
     // ---------------------------------------------------------------- state
 
     /** Shows the player while reading; otherwise the bubble, depending on its setting and the app on screen. */
+    /** The phone is locked: nothing of Yomiage's floats over the lock screen. */
+    var locked = false
+
     fun update(state: ReaderState, settings: Settings, foreground: String?) {
         lastPackage = foreground
         val active = state.status != Status.Idle
@@ -164,7 +167,14 @@ class Overlay(private val service: ReaderService, private val follow: FollowAlon
             shown = settings.playerVisibility != PlayerVisibility.NEVER
             dotted = settings.playerVisibility == PlayerVisibility.DOT
         }
-        if (active && ReadingView.open.value) {
+        if (locked) {
+            // The lock screen and Always On Display get the phone's own media controls instead.
+            closeMenu()
+            hideBubble()
+            hideBar()
+            remove(tap)
+            tap = null
+        } else if (active && ReadingView.open.value) {
             // The reading view is showing the text with its own controls.
             closeMenu()
             hideBubble()

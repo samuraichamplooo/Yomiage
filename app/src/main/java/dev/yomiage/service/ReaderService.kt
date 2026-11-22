@@ -91,7 +91,11 @@ class ReaderService : AccessibilityService() {
     override fun onServiceConnected() {
         if (!screenOnRegistered) {
             try {
-                val filter = android.content.IntentFilter(Intent.ACTION_SCREEN_ON)
+                val filter = android.content.IntentFilter().apply {
+                    addAction(Intent.ACTION_SCREEN_ON)
+                    addAction(Intent.ACTION_SCREEN_OFF)
+                    addAction(Intent.ACTION_USER_PRESENT)
+                }
                 if (android.os.Build.VERSION.SDK_INT >= 33) {
                     registerReceiver(screenOn, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
                 } else {
@@ -127,7 +131,11 @@ class ReaderService : AccessibilityService() {
         }
         foreground.value = activeAppPackage()
         scope.launch {
-            combine(Reader.state, Prefs.settings, foreground, ReadingView.open) { st, settings, pkg, _ -> Triple(st, settings, pkg) }
+            checkLocked()
+            combine(Reader.state, Prefs.settings, foreground, ReadingView.open, locked) { st, settings, pkg, _, isLocked ->
+                o.locked = isLocked
+                Triple(st, settings, pkg)
+            }
                 .collect { (st, settings, pkg) ->
                     o.update(st, settings, pkg)
                     f.onState(st)
@@ -152,6 +160,7 @@ class ReaderService : AccessibilityService() {
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                checkLocked()
                 if (keepApp != null) checkKeepApp()
                 trackForeground()
                 if (e.packageName?.toString() != packageName && Reader.state.value.fromScreen) follow?.onScreenMoved()
@@ -186,7 +195,24 @@ class ReaderService : AccessibilityService() {
     // Screen back on: catch the highlight up with where reading got to.
     private val screenOn = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
-            follow?.onScreenMoved()
+            checkLocked()
+            if (intent.action == Intent.ACTION_SCREEN_ON || intent.action == Intent.ACTION_USER_PRESENT) {
+                follow?.onScreenMoved()
+            }
+        }
+    }
+
+    private val keyguard by lazy { getSystemService(android.app.KeyguardManager::class.java) }
+
+    // Locked (lock screen or Always On Display): Yomiage's floating player, dot, bubble and
+    // highlight step aside, leaving the lock screen to the phone's own media controls (Now bar).
+    private val locked = MutableStateFlow(false)
+
+    private fun checkLocked() {
+        locked.value = try {
+            keyguard.isKeyguardLocked || !power.isInteractive
+        } catch (e: Exception) {
+            false
         }
     }
     private var screenOnRegistered = false

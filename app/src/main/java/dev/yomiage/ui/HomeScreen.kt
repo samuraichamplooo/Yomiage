@@ -922,7 +922,7 @@ private fun PlayerSection(context: Context, settings: YSettings) {
         Column(Modifier.padding(16.dp)) {
             Text("Player size", color = PaperWhite, fontSize = 15.sp)
             Text(
-                "Full shows the whole player. Small is a pill you can drag anywhere.",
+                "Full shows the whole player. Small is a pill you can drag anywhere, with play/pause and skip back and ahead.",
                 color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
             )
             Spacer(Modifier.height(10.dp))
@@ -930,6 +930,31 @@ private fun PlayerSection(context: Context, settings: YSettings) {
                 FilterChip("Full", !settings.playerMini) { Prefs.update { it.copy(playerMini = false) } }
                 Spacer(Modifier.width(8.dp))
                 FilterChip("Small", settings.playerMini) { Prefs.update { it.copy(playerMini = true) } }
+            }
+        }
+        Divider()
+        Column(Modifier.padding(16.dp)) {
+            Text("Skip buttons", color = PaperWhite, fontSize = 15.sp)
+            Text(
+                "How far the skip buttons jump, on the player, in the quick panel, on the lock screen and on headphones " +
+                    "(next and previous use the bigger skip).",
+                color = Faint, fontSize = 12.sp, lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text("Small skip", color = SoftText, fontSize = 13.sp)
+            Spacer(Modifier.height(6.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (n in listOf(2, 3, 4)) {
+                    FilterChip("$n seconds", settings.skipSmall == n) { Prefs.update { it.copy(skipSmall = n) } }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text("Big skip", color = SoftText, fontSize = 13.sp)
+            Spacer(Modifier.height(6.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (n in listOf(5, 10, 15)) {
+                    FilterChip("$n seconds", settings.skipBig == n) { Prefs.update { it.copy(skipBig = n) } }
+                }
             }
         }
         Divider()

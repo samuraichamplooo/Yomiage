@@ -34,7 +34,8 @@ import kotlin.math.max
 /**
  * Media controls for whatever is being read: in the quick panel, on the lock screen and Always On
  * Display (Samsung's Now Bar draws them in its own sleek black style) and on headphones.
- * Next/previous jump 5 seconds; extra buttons jump 2 seconds; the bar can be dragged to scrub.
+ * Next/previous jump the big skip (5 seconds unless changed); extra buttons jump the small skip
+ * (3 seconds); the bar can be dragged to scrub.
  * Tapping the controls brings the on-screen player back if it was hidden.
  *
  * Easy on the battery: the title is the page's title (not each sentence), the progress bar is
@@ -98,10 +99,10 @@ object MediaControls {
         s.setCallback(object : MediaSession.Callback() {
             override fun onPlay() = Reader.resume()
             override fun onPause() = Reader.pause()
-            override fun onSkipToNext() = Reader.seekBy(5f)
-            override fun onSkipToPrevious() = Reader.seekBy(-5f)
-            override fun onFastForward() = Reader.seekBy(2f)
-            override fun onRewind() = Reader.seekBy(-2f)
+            override fun onSkipToNext() = Reader.seekBy(big())
+            override fun onSkipToPrevious() = Reader.seekBy(-big())
+            override fun onFastForward() = Reader.seekBy(small())
+            override fun onRewind() = Reader.seekBy(-small())
             override fun onSeekTo(pos: Long) = Reader.seekToMs(pos)
             override fun onStop() = Reader.stop()
             override fun onCustomAction(action: String, extras: Bundle?) {
@@ -122,13 +123,16 @@ object MediaControls {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
+    private fun big() = Prefs.current.skipBig.toFloat()
+    private fun small() = Prefs.current.skipSmall.toFloat()
+
     fun handle(name: String) {
         when (name.removePrefix(PREFIX)) {
             "toggle" -> Reader.togglePlay()
-            "back5" -> Reader.seekBy(-5f)
-            "fwd5" -> Reader.seekBy(5f)
-            "back2" -> Reader.seekBy(-2f)
-            "fwd2" -> Reader.seekBy(2f)
+            "back5" -> Reader.seekBy(-big())
+            "fwd5" -> Reader.seekBy(big())
+            "back2" -> Reader.seekBy(-small())
+            "fwd2" -> Reader.seekBy(small())
             "stop" -> Reader.stop()
         }
     }
@@ -206,10 +210,10 @@ object MediaControls {
                                 PlaybackState.ACTION_SEEK_TO or PlaybackState.ACTION_STOP
                         )
                         .addCustomAction(
-                            PlaybackState.CustomAction.Builder(PREFIX + "back2", "Back 2 seconds", R.drawable.ic_rewind).build()
+                            PlaybackState.CustomAction.Builder(PREFIX + "back2", "Back ${Prefs.current.skipSmall} seconds", R.drawable.ic_rewind).build()
                         )
                         .addCustomAction(
-                            PlaybackState.CustomAction.Builder(PREFIX + "fwd2", "Forward 2 seconds", R.drawable.ic_forward).build()
+                            PlaybackState.CustomAction.Builder(PREFIX + "fwd2", "Forward ${Prefs.current.skipSmall} seconds", R.drawable.ic_forward).build()
                         )
                         .setState(state, pos, if (state == PlaybackState.STATE_PLAYING) st.speed else 0f, now)
                         .build()
@@ -240,7 +244,7 @@ object MediaControls {
 
             // The notification itself only changes with play/pause, the title or an error.
             if (!nm.areNotificationsEnabled()) return
-            val key = "$active|$title|$subtitle|${st.status == Status.Error}"
+            val key = "$active|$title|$subtitle|${st.status == Status.Error}|${Prefs.current.skipBig}"
             if (key == postedKey) return
             postedKey = key
             val icon = { res: Int -> Icon.createWithResource(app, res) }
@@ -250,14 +254,14 @@ object MediaControls {
                 .setContentTitle(title)
                 .setContentText(subtitle)
                 .setStyle(Notification.MediaStyle().setMediaSession(s.sessionToken).setShowActionsInCompactView(0, 1, 2))
-                .addAction(Notification.Action.Builder(icon(R.drawable.ic_rewind), "Back 5 seconds", action("back5", 11)).build())
+                .addAction(Notification.Action.Builder(icon(R.drawable.ic_rewind), "Back ${Prefs.current.skipBig} seconds", action("back5", 11)).build())
                 .addAction(
                     Notification.Action.Builder(
                         icon(if (active) R.drawable.ic_pause else R.drawable.ic_play),
                         if (active) "Pause" else "Play", action("toggle", 12),
                     ).build()
                 )
-                .addAction(Notification.Action.Builder(icon(R.drawable.ic_forward), "Forward 5 seconds", action("fwd5", 13)).build())
+                .addAction(Notification.Action.Builder(icon(R.drawable.ic_forward), "Forward ${Prefs.current.skipBig} seconds", action("fwd5", 13)).build())
                 .addAction(Notification.Action.Builder(icon(R.drawable.ic_close), "Stop", action("stop", 14)).build())
                 .setContentIntent(showPlayerIntent())
                 .setDeleteIntent(action("stop", 15))

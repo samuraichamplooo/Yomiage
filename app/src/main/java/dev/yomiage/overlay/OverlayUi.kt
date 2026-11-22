@@ -53,6 +53,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -80,6 +81,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.yomiage.R
+import dev.yomiage.data.Prefs
 import dev.yomiage.theme.Look
 import dev.yomiage.reader.Progress
 import dev.yomiage.reader.Reader
@@ -340,11 +342,14 @@ fun PlayerBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    SeekButton(R.drawable.ic_rewind, "5", "Back 5 seconds") { actions.onSeek(-5f) }
-                    SeekButton(R.drawable.ic_rewind, "2", "Back 2 seconds") { actions.onSeek(-2f) }
+                    val skips by Prefs.settings.collectAsState()
+                    val big = skips.skipBig
+                    val small = skips.skipSmall
+                    SeekButton(R.drawable.ic_rewind, "$big", "Back $big seconds") { actions.onSeek(-big.toFloat()) }
+                    SeekButton(R.drawable.ic_rewind, "$small", "Back $small seconds") { actions.onSeek(-small.toFloat()) }
                     PlayButton(state.status, actions.onPlayPause)
-                    SeekButton(R.drawable.ic_forward, "2", "Forward 2 seconds") { actions.onSeek(2f) }
-                    SeekButton(R.drawable.ic_forward, "5", "Forward 5 seconds") { actions.onSeek(5f) }
+                    SeekButton(R.drawable.ic_forward, "$small", "Forward $small seconds") { actions.onSeek(small.toFloat()) }
+                    SeekButton(R.drawable.ic_forward, "$big", "Forward $big seconds") { actions.onSeek(big.toFloat()) }
                     SpeedChip(state.speed, showSpeed) { showSpeed = !showSpeed }
                 }
                 AnimatedVisibility(showSpeed) {
@@ -355,7 +360,7 @@ fun PlayerBar(
     }
 }
 
-/** The shrunk player: drag grip, play/pause with a progress ring, and expand. */
+/** The shrunk player: drag grip, skip back, play/pause with a progress ring, skip ahead, and expand. */
 @Composable
 fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
     val last = remember { FloatArray(2) }
@@ -376,6 +381,8 @@ fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
             ) {
                 Icon(painterResource(R.drawable.ic_drag), "Move", tint = Muted, modifier = Modifier.size(18.dp))
             }
+            val big = Prefs.settings.collectAsState().value.skipBig
+            SeekButton(R.drawable.ic_rewind, "$big", "Back $big seconds") { actions.onSeek(-big.toFloat()) }
             val playing = state.status == Status.Playing || state.status == Status.Buffering || state.status == Status.Preparing
             Box(
                 Modifier
@@ -401,6 +408,7 @@ fun MiniPlayer(state: ReaderState, actions: PlayerActions) {
                     modifier = Modifier.size(24.dp),
                 )
             }
+            SeekButton(R.drawable.ic_forward, "$big", "Forward $big seconds") { actions.onSeek(big.toFloat()) }
             SmallIcon(R.drawable.ic_expand, "Show the full player", actions.onExpand)
             actions.onDot?.let { SmallIcon(R.drawable.ic_dot, "Shrink to a dot", it, tint = Vermilion) }
             actions.onHide?.let { SmallIcon(R.drawable.ic_hide, "Hide the player", it) }
